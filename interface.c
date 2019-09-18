@@ -35,6 +35,7 @@
 #include "interface.h"
 #include "layout.h"
 #include "player.h"
+#include "cues.h"
 #include "rig.h"
 #include "selector.h"
 #include "status.h"
@@ -151,6 +152,8 @@ static TTF_Font *clock_font, *deci_font, *detail_font,
 static SDL_Color background_col = {0, 0, 0, 255},
     text_col = {224, 224, 224, 255},
     alert_col = {192, 64, 0, 255},
+    cue_col[] = {{255,0,0,255},{255,255,0,255},{0,255,0,255},{255,0,255,255},{255,200,55,255},
+                {0,255,255,255},{55,55,255,255},{0,155,55,255},{55,200,255,255},{55,0,200,255}},
     ok_col = {32, 128, 3, 255},
     elapsed_col = {0, 32, 255, 255},
     cursor_col = {192, 0, 0, 255},
@@ -736,6 +739,76 @@ static void draw_spinner(SDL_Surface *surface, const struct rect *rect,
 }
 
 /*
+ * Draw the cue-cube
+ *
+ */
+
+static void draw_cues(SDL_Surface *surface, const struct rect *rect,
+                         struct deck *de, int nd)
+{
+    int x, y, r, c, bs, br, bc, b, d;
+    Uint8 *rp, *p;
+    SDL_Color col, col_b;
+    struct cues *cu;
+
+    x = rect->x;
+    y = rect->y;
+
+    bs = spinner_size / 3;
+    cu = &de->cues;
+
+
+    for (r = 0; r < spinner_size; r++) {
+    rp = surface->pixels + (y + r) * surface->pitch;
+    br = r % bs;
+
+        for (c = 0; c < spinner_size; c++) {
+            p = rp + (x + c) * surface->format->BytesPerPixel;
+            bc = c % bs;
+            d = (c / bs) % 3;
+            b = (2 - r / bs) * 3 + d;
+            col = needle_col;
+            col_b = dim(needle_col, 2);
+
+            if (b<0) continue;
+
+            if (de->cue_mode & CUE_ACTIVE && de->cue_mode & CUE_SINGLEDECK) {
+                col = cue_col[b];
+                col_b = cue_col[b];
+
+                if (cues_get(cu,b) == CUE_UNSET)
+                    col = dim(col, 1);
+                
+            } else {
+                if (de->cue_mode & CUE_ACTIVE) 
+                    if (d == nd && d < ndeck) 
+                        col_b = cue_col[b/3];
+                                    
+                col = cue_col[b/3];
+
+                if (cues_get(cu, b/3) == CUE_UNSET || d != nd)
+                    col = dim(col, 1);
+                
+            }
+
+            if ((br == 1 || br == 14 ) && bc > 1 && bc < 14) {
+                p[0] = col_b.b;
+                p[1] = col_b.g;
+                p[2] = col_b.r;
+            } else if ((bc == 1 || bc == 14 ) && br > 1 && br < 14) {
+                p[0] = col_b.b;
+                p[1] = col_b.g;
+                p[2] = col_b.r;
+            } else if (bc > 1 && bc < 14 && br >1 && br < 14) {
+                p[0] = col.b >> 1;
+                p[1] = col.g >> 1;
+                p[2] = col.r >> 1;
+            }
+        }
+    }
+}
+
+/*
  * Draw the clocks which show time elapsed and time remaining
  */
 
@@ -777,10 +850,11 @@ static void draw_deck_clocks(SDL_Surface *surface, const struct rect *rect,
  */
 
 static void draw_overview(SDL_Surface *surface, const struct rect *rect,
-                          struct track *tr, int position)
+                          struct track *tr, struct cues *cue, int position)
 {
-    int x, y, w, h, r, c, sp, fade, bytes_per_pixel, pitch, height,
-        current_position;
+    int n, x, y, w, h, r, c, sp, fade, bytes_per_pixel, pitch, height;
+    int current_position;
+    int cue_position[10];
     Uint8 *pixels, *p;
     SDL_Color col;
 
@@ -792,11 +866,17 @@ static void draw_overview(SDL_Surface *surface, const struct rect *rect,
     pixels = surface->pixels;
     bytes_per_pixel = surface->format->BytesPerPixel;
     pitch = surface->pitch;
-
-    if (tr->length)
+    
+    if (tr->length) {
         current_position = (long long)position * w / tr->length;
-    else
+
+        for (n=0; n<10;n++) 
+            cue_position[n] = cues_get(cue,n) > tr->length ? -1 : (long long) cues_get(cue,n) * tr->rate * w / tr->length;        
+    } else {
         current_position = 0;
+
+        for (n=0; n<10;n++) cue_position[n] = -1;
+    }
 
     for (c = 0; c < w; c++) {
 
@@ -825,6 +905,12 @@ static void draw_overview(SDL_Surface *surface, const struct rect *rect,
             fade = 3;
         }
 
+        for (n=0;n<10;n++) 
+            if (c == cue_position[n]) {
+                col = cue_col[n];
+                fade = 1;
+            }
+        
         if (track_is_importing(tr))
             col = dim(col, 1);
 
@@ -859,11 +945,12 @@ static void draw_overview(SDL_Surface *surface, const struct rect *rect,
  */
 
 static void draw_closeup(SDL_Surface *surface, const struct rect *rect,
-                         struct track *tr, int position, int scale)
+                         struct track *tr, struct cues *cue, int position, int scale)
 {
-    int x, y, w, h, c;
+    int n, x, y, w, h, c;
     size_t bytes_per_pixel, pitch;
     Uint8 *pixels;
+    int cue_position[10];
 
     x = rect->x;
     y = rect->y;
@@ -876,6 +963,9 @@ static void draw_closeup(SDL_Surface *surface, const struct rect *rect,
 
     /* Draw in columns. This may seem like a performance hit,
      * but oprofile shows it makes no difference */
+
+    for (n=0;n<10;n++) 
+        cue_position[n] = ((int)(cues_get(cue,n) * tr->rate - position) >> scale) + (w / 2);
 
     for (c = 0; c < w; c++) {
         int r, sp, height, fade;
@@ -901,6 +991,12 @@ static void draw_closeup(SDL_Surface *surface, const struct rect *rect,
             col = elapsed_col;
             fade = 3;
         }
+
+        for (n=0;n<10;n++)
+            if (c == cue_position[n]) {
+                col = cue_col[n];
+                fade = 1;
+            }
 
         /* Get a pointer to the top of the column, and increment
          * it for each row */
@@ -930,18 +1026,26 @@ static void draw_closeup(SDL_Surface *surface, const struct rect *rect,
  */
 
 static void draw_meters(SDL_Surface *surface, const struct rect *rect,
-                        struct track *tr, int position, int scale)
+                        struct deck *d, int position, int scale)
 {
     struct rect overview, closeup;
-
+    
+    struct cues *c;
+    struct player *pl;
+    struct track *tr;
+    
+    c = &d->cues;
+    pl = &d->player;
+    tr = pl->track;
+    
     split(*rect, from_top(OVERVIEW_HEIGHT, SPACER), &overview, &closeup);
 
     if (closeup.h > OVERVIEW_HEIGHT)
-        draw_overview(surface, &overview, tr, position);
+        draw_overview(surface, &overview, tr, c, position);
     else
         closeup = *rect;
 
-    draw_closeup(surface, &closeup, tr, position, scale);
+    draw_closeup(surface, &closeup, tr, c, position, scale);
 }
 
 /*
@@ -949,24 +1053,34 @@ static void draw_meters(SDL_Surface *surface, const struct rect *rect,
  */
 
 static void draw_deck_top(SDL_Surface *surface, const struct rect *rect,
-                          struct player *pl, struct track *track)
+                          struct deck *de, struct track *track, int d)
 {
-    struct rect clocks, left, right, spinner, scope;
+    struct rect clocks, left, cues, right, spinner, scope;
+    struct player *pl;
 
     split(*rect, from_left(CLOCKS_WIDTH, SPACER), &clocks, &right);
 
     /* If there is no timecoder to display information on, or not enough
      * available space, just draw clocks which span the overall space */
 
+    pl = &de->player;
+
     if (!pl->timecode_control || right.w < 0) {
-        draw_deck_clocks(surface, rect, pl, track);
+        split(*rect, from_right(SPINNER_SIZE, SPACER), &right, &cues);
+        split(cues, from_bottom(SPINNER_SIZE, 0), NULL, &cues);
+        draw_deck_clocks(surface, &right, pl, track);
+        draw_cues(surface, &cues, de, d);
         return;
     }
 
     draw_deck_clocks(surface, &clocks, pl, track);
 
+    split(right, from_right(SPINNER_SIZE, SPACER), &right, &cues);
+    split(cues, from_bottom(SPINNER_SIZE, 0), NULL, &cues);
+    draw_cues(surface, &cues, de, d);
+
     split(right, from_right(SPINNER_SIZE, SPACER), &left, &spinner);
-    if (left.w < 0)
+    if (!pl->timecode_control || left.w < 0)
         return;
     split(spinner, from_bottom(SPINNER_SIZE, 0), NULL, &spinner);
     draw_spinner(surface, &spinner, pl);
@@ -1018,7 +1132,7 @@ static void draw_deck_status(SDL_Surface *surface,
  */
 
 static void draw_deck(SDL_Surface *surface, const struct rect *rect,
-                      struct deck *deck, int meter_scale)
+                      struct deck *deck, int meter_scale, int d)
 {
     int position;
     struct rect track, top, meters, status, rest, lower;
@@ -1040,7 +1154,7 @@ static void draw_deck(SDL_Surface *surface, const struct rect *rect,
     if (lower.h < 64)
         lower = rest;
     else
-        draw_deck_top(surface, &top, pl, t);
+        draw_deck_top(surface, &top, deck, t, d);
 
     split(lower, from_bottom(FONT_SPACE, SPACER), &meters, &status);
     if (meters.h < 64)
@@ -1048,7 +1162,7 @@ static void draw_deck(SDL_Surface *surface, const struct rect *rect,
     else
         draw_deck_status(surface, &status, deck);
 
-    draw_meters(surface, &meters, t, position, meter_scale);
+    draw_meters(surface, &meters, deck, position, meter_scale);
 }
 
 /*
@@ -1065,7 +1179,7 @@ static void draw_decks(SDL_Surface *surface, const struct rect *rect,
 
     for (d = 0; d < ndecks; d++) {
         split(right, columns(d, ndecks, BORDER), &left, &right);
-        draw_deck(surface, &left, &deck[d], meter_scale);
+        draw_deck(surface, &left, &deck[d], meter_scale, d);
     }
 }
 
@@ -1405,7 +1519,15 @@ static bool handle_key(SDLKey key, SDLMod mod)
 
         fprintf(stderr, "Meter scale decreased to %d\n", meter_scale);
 
-    } else if (key == SDLK_MINUS) {
+    } else if ((key == SDLK_KP_ENTER) || (key == SDLK_KP_PLUS)) {
+        meter_scale--;
+
+        if (meter_scale < 0)
+            meter_scale = 0;
+
+        fprintf(stderr, "Meter scale decreased to %d\n", meter_scale);
+
+    } else if (key == SDLK_MINUS || key == SDLK_KP_MINUS) {
         meter_scale++;
 
         if (meter_scale > MAX_METER_SCALE)
@@ -1458,9 +1580,63 @@ static bool handle_key(SDLKey key, SDLMod mod)
                 break;
             }
         }
+    } 
+    else if (key >= SDLK_KP1 && key <= SDLK_KP9) {
+        size_t d;
+        int label;
+
+        label = key - SDLK_KP1;
+
+        if (mod & KMOD_LCTRL) 
+            d = 0;
+        else if (mod & KMOD_RCTRL) 
+            d = 1;
+        else {
+            d = (key - SDLK_KP1) % 3;
+            label = label / 3;
+        }
+
+        if (d < ndeck) {
+            struct deck *de;
+                       
+            de = &deck[d];
+            
+            if (mod & KMOD_SHIFT)
+                cues_unset(&de->cues, label);
+            else
+                deck_cue(de, label);           
+        }
+    } else if (key == SDLK_KP_PERIOD) {
+        if ((&deck[0])->cue_mode & CUE_SINGLEDECK) {
+            (&deck[0])->cue_mode = CUE_ACTIVE;
+            (&deck[1])->cue_mode = CUE_ACTIVE;
+            (&deck[2])->cue_mode = CUE_ACTIVE;
+        } else {
+            (&deck[0])->cue_mode = CUE_SINGLEDECK;
+            (&deck[1])->cue_mode = CUE_SINGLEDECK;
+            (&deck[2])->cue_mode = CUE_SINGLEDECK;
+            (&deck[ndeck-1])->cue_mode |= CUE_ACTIVE;
+        }
+    }else if (key == SDLK_LCTRL) {
+        (&deck[0])->cue_mode = CUE_SINGLEDECK | CUE_ACTIVE;
+        (&deck[1])->cue_mode = CUE_SINGLEDECK;
+        (&deck[2])->cue_mode = CUE_SINGLEDECK;
+    } else if (key == SDLK_RCTRL) {
+        (&deck[0])->cue_mode = CUE_SINGLEDECK;
+        (&deck[1])->cue_mode = CUE_SINGLEDECK | CUE_ACTIVE;;
+        (&deck[2])->cue_mode = CUE_SINGLEDECK;
     }
 
     return false;
+}
+
+static void handle_keyup(SDLKey key, SDLMod mod)
+{
+    if (key == SDLK_LCTRL || key == SDLK_RCTRL) {
+        (&deck[0])->cue_mode = CUE_ACTIVE;
+        (&deck[1])->cue_mode = CUE_ACTIVE;
+        (&deck[2])->cue_mode = CUE_ACTIVE;
+    }
 }
 
 /*
@@ -1601,7 +1777,10 @@ static int interface_main(void)
 
                 library_update = true;
             }
-
+            break;
+        case SDL_KEYUP:
+            handle_keyup(event.key.keysym.sym, event.key.keysym.mod);
+            break;
         } /* switch(event.type) */
 
         /* Split the display into the various areas. If an area is too

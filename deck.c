@@ -56,6 +56,7 @@ int deck_init(struct deck *deck, struct rt *rt)
     deck->ncontrol = 0;
     deck->record = &no_record;
     deck->punch = NO_PUNCH;
+	deck->cue_mode = CUE_ACTIVE;
     rate = device_sample_rate(&deck->device);
     player_init(&deck->player, rate, track_get_empty(), &deck->timecoder);
     cues_reset(&deck->cues);
@@ -101,6 +102,8 @@ void deck_load(struct deck *deck, struct record *record)
 
     deck->record = record;
     player_set_track(&deck->player, t); /* passes reference */
+    
+    cues_reset(&deck->cues);
 }
 
 void deck_recue(struct deck *deck)
@@ -116,6 +119,7 @@ void deck_recue(struct deck *deck)
 void deck_clone(struct deck *deck, const struct deck *from)
 {
     deck->record = from->record;
+	deck->cues = from->cues;
     player_clone(&deck->player, &from->player);
 }
 

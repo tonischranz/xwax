@@ -239,9 +239,15 @@ void player_set_timecode_control(struct player *pl, bool on)
 
 bool player_toggle_timecode_control(struct player *pl)
 {
+    if (!pl->timecode_control && pl->pitch == 0) {
+        pl->pitch = 1;
+        return false;
+    }
+
     pl->timecode_control = !pl->timecode_control;
     if (pl->timecode_control)
         pl->recalibrate = true;
+
     return pl->timecode_control;
 }
 

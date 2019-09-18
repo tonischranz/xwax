@@ -31,6 +31,10 @@
 
 #define NO_PUNCH (HUGE_VAL)
 
+#define CUE_INACTIVE 0
+#define CUE_ACTIVE 1
+#define CUE_SINGLEDECK 2
+
 struct deck {
     struct device device;
     struct timecoder timecoder;
@@ -40,6 +44,7 @@ struct deck {
     struct player player;
     const struct record *record;
     struct cues cues;
+	char cue_mode;
 
     /* Punch */
 
