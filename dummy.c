@@ -17,21 +17,18 @@
  *
  */
 
-#ifndef DEBUG_H
-#define DEBUG_H
+#include "dummy.h"
 
-#include <stdio.h>
-
-#ifdef DEBUG
-#define debug(...) { \
-    fprintf(stderr, "%s:%d: ", __FILE__, __LINE__); \
-    fprintf(stderr, __VA_ARGS__); \
-    fputc('\n', stderr); \
+static unsigned int sample_rate(struct device *d)
+{
+    return 48000;
 }
-#define dassert(x) assert(x)
-#else
-#define debug(...)
-#define dassert(x)
-#endif
 
-#endif
+static struct device_ops dummy_ops = {
+    .sample_rate = sample_rate,
+};
+
+void dummy_init(struct device *d)
+{
+    device_init(d, &dummy_ops);
+}

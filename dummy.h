@@ -17,21 +17,11 @@
  *
  */
 
-#ifndef DEBUG_H
-#define DEBUG_H
+#ifndef DUMMY_H
+#define DUMMY_H
 
-#include <stdio.h>
+#include "device.h"
 
-#ifdef DEBUG
-#define debug(...) { \
-    fprintf(stderr, "%s:%d: ", __FILE__, __LINE__); \
-    fprintf(stderr, __VA_ARGS__); \
-    fputc('\n', stderr); \
-}
-#define dassert(x) assert(x)
-#else
-#define debug(...)
-#define dassert(x)
-#endif
+void dummy_init(struct device *d);
 
 #endif

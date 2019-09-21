@@ -1,4 +1,4 @@
-# Copyright (C) 2014 Mark Hills <mark@xwax.org>
+# Copyright (C) 2016 Mark Hills <mark@xwax.org>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2, as
@@ -50,6 +50,7 @@ OBJS = controller.o \
 	cues.o \
 	deck.o \
 	device.o \
+	dummy.o \
 	excrate.o \
 	external.o \
 	index.o \
@@ -98,12 +99,12 @@ DEVICE_CPPFLAGS += -DWITH_OSS
 endif
 
 TEST_OBJS = $(addsuffix .o,$(TESTS))
-DEPS = $(OBJS:.o=.d) $(TEST_OBJS:.o=.d)
+DEPS = $(OBJS:.o=.d) $(TEST_OBJS:.o=.d) mktimecode.d
 
 # Rules
 
 .PHONY:		all
-all:		xwax tests
+all:		xwax mktimecode tests
 
 # Dynamic versioning
 
@@ -125,6 +126,11 @@ xwax.o:		CFLAGS += $(SDL_CFLAGS)
 xwax.o:		CPPFLAGS += $(DEVICE_CPPFLAGS)
 xwax.o:		CPPFLAGS += -DEXECDIR=\"$(EXECDIR)\" -DVERSION=\"$(VERSION)\"
 xwax.o:		.version
+
+# Supporting programs
+
+mktimecode:	mktimecode.o
+mktimecode:	LDLIBS  += -lm
 
 # Install to system
 
@@ -185,6 +191,7 @@ clean:
 		rm -f xwax \
 			$(OBJS) $(DEPS) \
 			$(TESTS) $(TEST_OBJS) \
+			mktimecode mktimecode.o \
 			TAGS
 
 -include $(DEPS)
