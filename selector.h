@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>,
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>,
  *                    Yves Adler <yves.adler@googlemail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -22,32 +22,29 @@
 #define SELECTOR_H
 
 #include <stdbool.h>
-#include <stddef.h>
 
 #include "library.h"
-#include "listing.h"
-
-/* Managed context of a scrolling window, of a number of fixed-height
- * lines, backed by a list of a known number of entries */
-
-struct scroll {
-    int lines, offset, entries, selected;
-};
+#include "listbox.h"
+#include "index.h"
 
 struct selector {
     struct library *library;
-    struct listing
-        *view_listing, /* base_listing + search filter applied */
-        *swap_listing, /* used to swap between a and b listings */
-        listing_a, listing_b;
+    struct index
+        *view_index, /* base_index + search filter applied */
+        *swap_index, /* used to swap between a and b indexes */
+        index_a, index_b;
 
-    struct scroll records, crates;
+    struct listbox records, crates;
     bool toggled;
     int toggle_back, sort;
     struct record *target;
+    struct observer on_activity, on_refresh, on_addition;
 
     size_t search_len;
     char search[256];
+    struct match match; /* the compiled search, kept in-sync */
+
+    struct event changed;
 };
 
 void selector_init(struct selector *sel, struct library *lib);
@@ -68,6 +65,7 @@ void selector_prev(struct selector *sel);
 void selector_next(struct selector *sel);
 void selector_toggle(struct selector *sel);
 void selector_toggle_order(struct selector *sel);
+void selector_rescan(struct selector *sel);
 
 void selector_search_expand(struct selector *sel);
 void selector_search_refine(struct selector *sel, char key);

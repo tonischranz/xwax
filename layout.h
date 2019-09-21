@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -237,7 +237,10 @@ static inline struct rect shrink(const struct rect in, int distance)
 
 static inline unsigned int count_rows(struct rect in, unsigned int row_height)
 {
-    return in.h / (row_height * in.scale);
+    unsigned int pixels;
+
+    pixels = row_height * in.scale;
+    return in.h / pixels;
 }
 
 #endif

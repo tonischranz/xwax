@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -56,7 +56,7 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*x))
 
 char *banner = "xwax " VERSION \
-    " (C) Copyright 2013 Mark Hills <mark@xwax.org>";
+    " (C) Copyright 2014 Mark Hills <mark@xwax.org>";
 
 size_t ndeck;
 struct deck deck[3];
@@ -306,7 +306,7 @@ int main(int argc, char *argv[])
                 return -1;
             }
 
-            fprintf(stderr, "Initialising deck %d (%s)...\n", ndeck, argv[1]);
+            fprintf(stderr, "Initialising deck %zd (%s)...\n", ndeck, argv[1]);
 
             ld = &deck[ndeck];
             device = &ld->device;
@@ -558,13 +558,6 @@ int main(int argc, char *argv[])
         fprintf(stderr, "You need to give at least one audio device to use "
                 "as a deck; try -h.\n");
         return -1;
-    }
-
-    /* FIXME: move this to controller for proper error recovery */
-
-    for (n = 0; n < nctl; n++) {
-        if (rt_add_controller(&rt, &ctl[n]) == -1)
-            return -1;
     }
 
     rc = EXIT_FAILURE; /* until clean exit */

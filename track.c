@@ -1,15 +1,15 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2, as published by the Free Software Foundation.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; if not, write to the Free
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -17,12 +17,10 @@
  *
  */
 
-#define _BSD_SOURCE /* vfork() */
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/mman.h> /* mlock() */
@@ -282,7 +280,7 @@ static struct track* track_get_again(const char *importer, const char *path)
 
     list_for_each(t, &tracks, tracks) {
         if (t->importer == importer && t->path == path) {
-            track_get(t);
+            track_acquire(t);
             return t;
         }
     }
@@ -296,7 +294,7 @@ static struct track* track_get_again(const char *importer, const char *path)
  * Return: pointer, or NULL if not enough resources
  */
 
-struct track* track_get_by_import(const char *importer, const char *path)
+struct track* track_acquire_by_import(const char *importer, const char *path)
 {
     struct track *t;
 
@@ -315,7 +313,7 @@ struct track* track_get_by_import(const char *importer, const char *path)
         return NULL;
     }
 
-    track_get(t);
+    track_acquire(t);
 
     return t;
 }
@@ -326,13 +324,13 @@ struct track* track_get_by_import(const char *importer, const char *path)
  * Return: pointer, not NULL
  */
 
-struct track* track_get_empty(void)
+struct track* track_acquire_empty(void)
 {
     empty.refcount++;
     return &empty;
 }
 
-void track_get(struct track *t)
+void track_acquire(struct track *t)
 {
     t->refcount++;
 }
@@ -355,7 +353,7 @@ static void terminate(struct track *t)
  * Finish use of a track object
  */
 
-void track_put(struct track *t)
+void track_release(struct track *t)
 {
     t->refcount--;
 
@@ -482,5 +480,5 @@ void track_handle(struct track *tr)
 
     stop_import(tr);
     list_del(&tr->rig);
-    track_put(tr); /* may delete the track */
+    track_release(tr); /* may delete the track */
 }

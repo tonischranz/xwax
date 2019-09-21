@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,23 +18,26 @@
  */
 
 #define _GNU_SOURCE /* strcasestr(), strdupa() */
+#include <assert.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "listing.h"
+#include "index.h"
 
 #define BLOCK 1024
 #define MAX_WORDS 32
 #define SEPARATOR ' '
 
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(*x))
+
 /*
- * Initialise a record listing
+ * Initialise a record index
  */
 
-void listing_init(struct listing *ls)
+void index_init(struct index *ls)
 {
     ls->record = NULL;
     ls->size = 0;
@@ -42,39 +45,39 @@ void listing_init(struct listing *ls)
 }
 
 /*
- * Deallocate resources associated with this listing
+ * Deallocate resources associated with this index
  *
- * The listing does not allocate records itself, so it is not
+ * The index does not allocate records itself, so it is not
  * responsible for deallocating them.
  */
 
-void listing_clear(struct listing *ls)
+void index_clear(struct index *ls)
 {
     if (ls->record != NULL)
         free(ls->record);
 }
 
 /*
- * Blank the listing so it contains no entries
+ * Blank the index so it contains no entries
  *
  * We don't de-allocate memory, but this gives us an advantage where
- * listing re-use is of similar size.
+ * index re-use is of similar size.
  */
 
-void listing_blank(struct listing *ls)
+void index_blank(struct index *ls)
 {
     ls->entries = 0;
 }
 
 /*
- * Enlarge the storage space of the listing to at least the target
+ * Enlarge the storage space of the index to at least the target
  * size
  *
  * Return: 0 on success or -1 on memory allocation failure
- * Post: size of listing is greater than or equal to target
+ * Post: size of index is greater than or equal to target
  */
 
-static int enlarge(struct listing *ls, size_t target)
+static int enlarge(struct index *ls, size_t target)
 {
     size_t p;
     struct record **ln;
@@ -96,18 +99,28 @@ static int enlarge(struct listing *ls, size_t target)
 }
 
 /*
- * Add a record to the listing
- *
- * Return: 0 on success or -1 on memory allocation failure
+ * Return: false if the caller did not call index_reserve(), otherwise
+ * true
  */
 
-int listing_add(struct listing *ls, struct record *lr)
+static bool has_space(const struct index *i)
 {
-    if (enlarge(ls, ls->entries + 1) == -1)
-        return -1;
+    return i->entries < i->size;
+}
+
+/*
+ * Add a record to the index
+ *
+ * Pre: at least one entry is reserved
+ * Post: lr is the record at the end of the index
+ */
+
+void index_add(struct index *ls, struct record *lr)
+{
+    assert(lr != NULL);
+    assert(has_space(ls));
 
     ls->record[ls->entries++] = lr;
-    return 0;
 }
 
 /*
@@ -156,7 +169,7 @@ static int record_cmp_bpm(const struct record *a, const struct record *b)
  * Return: true if this is a match, otherwise false
  */
 
-static bool record_match(struct record *re, const char *match)
+static bool record_match_word(struct record *re, const char *match)
 {
     if (strcasestr(re->artist, match) != NULL)
         return true;
@@ -166,16 +179,19 @@ static bool record_match(struct record *re, const char *match)
 }
 
 /*
- * Check for a match against all the strings in a given
- * NULL-terminated array
+ * Check for a match against the given search criteria
  *
  * Return: true if the given record matches, otherwise false
  */
 
-static bool record_match_all(struct record *re, char **matches)
+bool record_match(struct record *re, const struct match *h)
 {
+    char *const *matches;
+
+    matches = h->words;
+
     while (*matches != NULL) {
-        if (!record_match(re, *matches))
+        if (!record_match_word(re, *matches))
             return false;
         matches++;
     }
@@ -183,57 +199,52 @@ static bool record_match_all(struct record *re, char **matches)
 }
 
 /*
- * Copy the source listing
+ * Copy the source index
  *
  * Return: 0 on success or -1 on memory allocation failure
  * Post: on failure, dest is valid but incomplete
  */
 
-int listing_copy(const struct listing *src, struct listing *dest)
+int index_copy(const struct index *src, struct index *dest)
 {
     int n;
 
-    listing_blank(dest);
+    index_blank(dest);
 
-    for (n = 0; n < src->entries; n++) {
-	if (listing_add(dest, src->record[n]) != 0)
-	    return -1;
-    }
+    if (index_reserve(dest, src->entries) == -1)
+        return -1;
+
+    for (n = 0; n < src->entries; n++)
+        index_add(dest, src->record[n]);
 
     return 0;
 }
 
 /*
- * Find entries from the source listing with match the given string
+ * Compile a search object from a given string
  *
- * Copy the subset of the source listing which matches the given
- * string into the destination. This function defines what constitutes
- * a match.
- *
- * Return: 0 on success, or -1 on memory allocation failure
- * Post: on failure, dest is valid but incomplete
+ * Pre: search string is within length
  */
 
-int listing_match(struct listing *src, struct listing *dest,
-		  const char *match)
+void match_compile(struct match *h, const char *d)
 {
-    int n;
-    char *buf, *words[MAX_WORDS];
-    struct record *re;
+    char *buf;
+    size_t n;
 
-    fprintf(stderr, "Matching '%s'\n", match);
+    assert(strlen(d) < sizeof h->buf);
+    strcpy(h->buf, d);
 
-    buf = strdupa(match);
+    buf = h->buf;
     n = 0;
     for (;;) {
         char *s;
 
-        if (n == MAX_WORDS - 1) {
+        if (n == ARRAY_SIZE(h->words) - 1) {
             fputs("Ignoring excessive words in match string.\n", stderr);
             break;
         }
 
-        words[n] = buf;
+        h->words[n] = buf;
         n++;
 
         s = strchr(buf, SEPARATOR);
@@ -242,16 +253,34 @@ int listing_match(struct listing *src, struct listing *dest,
         *s = '\0';
         buf = s + 1; /* skip separator */
     }
-    words[n] = NULL; /* terminate list */
+    h->words[n] = NULL; /* terminate list */
+}
 
-    listing_blank(dest);
+/*
+ * Find entries from the source index which match
+ *
+ * Copy the subset of the source index which matches the given
+ * string into the destination.
+ *
+ * Return: 0 on success, or -1 on memory allocation failure
+ * Post: on failure, dest is valid but incomplete
+ */
+
+int index_match(struct index *src, struct index *dest,
+                const struct match *match)
+{
+    int n;
+    struct record *re;
+
+    index_blank(dest);
 
     for (n = 0; n < src->entries; n++) {
         re = src->record[n];
 
-        if (record_match_all(re, words)) {
-            if (listing_add(dest, re) == -1)
+        if (record_match(re, match)) {
+            if (index_reserve(dest, 1) == -1)
                 return -1;
+            index_add(dest, re);
         }
     }
 
@@ -259,7 +288,7 @@ int listing_match(struct listing *src, struct listing *dest,
 }
 
 /*
- * Binary search of sorted listing
+ * Binary search of sorted index
  *
  * We implement our own binary search rather than using the bsearch()
  * from stdlib.h, because we need to know the position to insert to if
@@ -312,15 +341,16 @@ static size_t bin_search(struct record **base, size_t n,
 }
 
 /*
- * Insert or re-use an entry in a sorted listing
+ * Insert or re-use an entry in a sorted index
  *
- * Pre: listing is sorted
- * Return: pointer to item, or existing entry; NULL if out of memory
- * Post: listing is sorted and contains item or a matching item
+ * Pre: index is sorted
+ * Pre: at least one entry is reserved
+ * Return: pointer to item, or existing entry (ie. not NULL)
+ * Post: index is sorted and contains item or a matching item
  */
 
-struct record* listing_insert(struct listing *ls, struct record *item,
-                              int sort)
+struct record* index_insert(struct index *ls, struct record *item,
+                            int sort)
 {
     bool found;
     size_t z;
@@ -329,10 +359,7 @@ struct record* listing_insert(struct listing *ls, struct record *item,
     if (found)
         return ls->record[z];
 
-    /* Insert the new item */
-
-    if (enlarge(ls, ls->entries + 1) == -1)
-        return NULL;
+    assert(has_space(ls));
 
     memmove(ls->record + z + 1, ls->record + z,
             sizeof(struct record*) * (ls->entries - z));
@@ -343,10 +370,25 @@ struct record* listing_insert(struct listing *ls, struct record *item,
 }
 
 /*
+ * Reserve space in the index for the addition of n new items
+ *
+ * This function exists separately to the insert and addition
+ * functions because it carries the error case.
+ *
+ * Return: -1 if not enough memory, otherwise zero
+ * Post: if zero is returned, index has at least n free slots
+ */
+
+int index_reserve(struct index *i, unsigned int n)
+{
+    return enlarge(i, i->entries + n);
+}
+
+/*
  * Find an identical entry, or the nearest match
  */
 
-size_t listing_find(struct listing *ls, struct record *item, int sort)
+size_t index_find(struct index *ls, struct record *item, int sort)
 {
     bool found;
     size_t z;
@@ -356,10 +398,10 @@ size_t listing_find(struct listing *ls, struct record *item, int sort)
 }
 
 /*
- * Debug the content of a listing to standard error
+ * Debug the content of a index to standard error
  */
 
-void listing_debug(struct listing *ls)
+void index_debug(struct index *ls)
 {
     int n;
 

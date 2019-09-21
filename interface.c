@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -64,7 +64,7 @@
 #define DECI_FONT FONT
 #define DECI_FONT_SIZE 20
 
-#define DETAIL_FONT "DejaVuSansMono.ttf"
+#define DETAIL_FONT "DejaVuSansMono-Bold.ttf"
 #define DETAIL_FONT_SIZE 9
 #define DETAIL_FONT_SPACE 12
 
@@ -121,9 +121,10 @@
 
 /* Types of SDL_USEREVENT */
 
-#define EVENT_TICKER 0
-#define EVENT_QUIT 1
-#define EVENT_STATUS 2
+#define EVENT_TICKER (SDL_USEREVENT)
+#define EVENT_QUIT   (SDL_USEREVENT + 1)
+#define EVENT_STATUS (SDL_USEREVENT + 2)
+#define EVENT_SELECTOR (SDL_USEREVENT + 3)
 
 /* Macro functions */
 
@@ -143,6 +144,8 @@ static const char *font_dirs[] = {
     "/usr/share/fonts/ttf-dejavu",
     "/usr/share/fonts/dejavu",
     "/usr/share/fonts/TTF",
+    "/usr/share/fonts/truetype/dejavu",
+    "/usr/share/fonts/truetype/ttf-dejavu",
     NULL
 };
 
@@ -170,6 +173,7 @@ static int width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT,
 static float scale = DEFAULT_SCALE;
 static pthread_t ph;
 static struct selector selector;
+static struct observer on_status, on_selector;
 
 /*
  * Scale a dimension according to the current zoom level
@@ -1234,9 +1238,9 @@ static void draw_search(SDL_Surface *surface, const struct rect *rect,
 
     SDL_FillRect(surface, &cursor, palette(surface, &cursor_col));
 
-    if (sel->view_listing->entries > 1)
-        sprintf(cm, "%zd matches", sel->view_listing->entries);
-    else if (sel->view_listing->entries > 0)
+    if (sel->view_index->entries > 1)
+        sprintf(cm, "%zd matches", sel->view_index->entries);
+    else if (sel->view_index->entries > 0)
         sprintf(cm, "1 match");
     else
         sprintf(cm, "no matches");
@@ -1253,7 +1257,7 @@ static void draw_search(SDL_Surface *surface, const struct rect *rect,
  */
 
 static void draw_scroll_bar(SDL_Surface *surface, const struct rect *rect,
-                            const struct scroll *scroll)
+                            const struct listbox *scroll)
 {
     SDL_Rect box;
     SDL_Color bg;
@@ -1276,145 +1280,154 @@ static void draw_scroll_bar(SDL_Surface *surface, const struct rect *rect,
 }
 
 /*
- * Display a crate listing, with scrollbar and current selection
- *
- * Return: the number of lines which fit on the display.
+ * A callback function for drawing a row. Included here for
+ * readability where it is used.
  */
 
-static void draw_crates(SDL_Surface *surface, const struct rect *rect,
-                        const struct library *library,
-                        const struct scroll *scroll,
-                        int sort)
-{
-    size_t n;
-    struct rect left, bottom;
-
-    split(*rect, from_left(SCROLLBAR_SIZE, SPACER), &left, &bottom);
-    draw_scroll_bar(surface, &left, scroll);
-
-    n = scroll->offset;
-
-    for (;;) {
-        bool selected;
-        SDL_Color col;
-        struct rect top, remain;
-        const struct crate *crate;
-
-        if (n >= library->crates)
-            break;
-
-        split(bottom, from_top(FONT_SPACE, 0), &top, &remain);
-
-        if (remain.h < 0)
-            break;
-
-        bottom = remain;
-        crate = library->crate[n];
-        selected = (n == scroll->selected);
-
-        col = crate->is_fixed ? detail_col: text_col;
-
-        if (!selected) {
-            draw_text(surface, &top, crate->name, font, col, background_col);
-        } else {
-            struct rect left, right;
-
-            split(top, from_right(SORT_WIDTH, 0), &left, &right);
-            draw_text(surface, &left, crate->name, font, col, selected_col);
-
-            switch (sort) {
-            case SORT_ARTIST:
-                draw_token(surface, &right, "ART", text_col,
-                           artist_col, selected_col);
-                break;
-            case SORT_BPM:
-                draw_token(surface, &right, "BPM", text_col,
-                           bpm_col, selected_col);
-                break;
-            case SORT_PLAYLIST:
-                draw_token(surface, &right, "PLS", text_col,
-                           selected_col, selected_col);
-                break;
-            default:
-                abort();
-            }
-        }
-
-        n++;
-    }
-
-    draw_rect(surface, &bottom, background_col);
-}
-
-
+typedef void (*draw_row_t)(const void *context,
+                           SDL_Surface *surface, const struct rect rect,
+                           unsigned int entry, bool selected);
 
 /*
- * Display a record library listing, with scrollbar and current
- * selection
- *
- * Return: the number of lines which fit on the display
+ * Draw a listbox, using the given function to draw each row
  */
 
-static void draw_listing(SDL_Surface *surface, const struct rect *rect,
-                         const struct listing *listing,
-                         const struct scroll *scroll)
+static void draw_listbox(const struct listbox *lb, SDL_Surface *surface,
+                         const struct rect rect,
+                         const void *context, draw_row_t draw)
 {
-    size_t n;
+    struct rect left, remain;
+    unsigned int row;
+
+    split(rect, from_left(SCROLLBAR_SIZE, SPACER), &left, &remain);
+    draw_scroll_bar(surface, &left, lb);
+
+    row = 0;
+
+    for (row = 0;; row++) {
+        int entry;
+        bool selected;
+        struct rect line;
+
+        entry = listbox_map(lb, row);
+        if (entry == -1)
+            break;
+
+        if (entry == listbox_current(lb))
+            selected = true;
+        else
+            selected = false;
+
+        split(remain, from_top(FONT_SPACE, 0), &line, &remain);
+        draw(context, surface, line, entry, selected);
+    }
+
+    draw_rect(surface, &remain, background_col);
+}
+
+static void draw_crate_row(const void *context,
+                           SDL_Surface *surface, const struct rect rect,
+                           unsigned int entry, bool selected)
+{
+    const struct selector *selector = context;
+    const struct crate *crate;
+    struct rect left, right;
+    SDL_Color col;
+
+    crate = selector->library->crate[entry];
+
+    if (crate->is_fixed)
+        col = detail_col;
+    else
+        col = text_col;
+
+    if (!selected) {
+        draw_text(surface, &rect, crate->name, font, col, background_col);
+        return;
+    }
+
+    split(rect, from_right(SORT_WIDTH, 0), &left, &right);
+
+    switch (selector->sort) {
+    case SORT_ARTIST:
+        draw_token(surface, &right, "ART", text_col, artist_col, selected_col);
+        break;
+
+    case SORT_BPM:
+        draw_token(surface, &right, "BPM", text_col, bpm_col, selected_col);
+        break;
+
+    case SORT_PLAYLIST:
+        draw_token(surface, &right, "PLS", text_col, selected_col, selected_col);
+        break;
+
+    default:
+        abort();
+    }
+
+    if (crate->is_busy) {
+        split(left, from_right(25, 0), &left, &right);
+        draw_token(surface, &right, "BUSY", text_col,
+                   dim(alert_col, 2), selected_col);
+    }
+
+    draw_text(surface, &left, crate->name, font, col, selected_col);
+}
+
+/*
+ * Draw a crate index, with scrollbar and current selection
+ */
+
+static void draw_crates(SDL_Surface *surface, const struct rect rect,
+                        const struct selector *x)
+{
+    draw_listbox(&x->crates, surface, rect, x, draw_crate_row);
+}
+
+static void draw_record_row(const void *context,
+                            SDL_Surface *surface, const struct rect rect,
+                            unsigned int entry, bool selected)
+{
     int width;
-    struct rect left, bottom;
+    struct record *record;
+    const struct index *index = context;
+    struct rect left, right;
+    SDL_Color col;
 
-    split(*rect, from_left(SCROLLBAR_SIZE, SPACER), &left, &bottom);
-    draw_scroll_bar(surface, &left, scroll);
+    if (selected)
+        col = selected_col;
+    else
+        col = background_col;
 
-    /* Choose the width of the 'artist' column */
-
-    width = bottom.w / 2;
+    width = rect.w / 2;
     if (width > RESULTS_ARTIST_WIDTH)
         width = RESULTS_ARTIST_WIDTH;
 
-    n = scroll->offset;
+    record = index->record[entry];
 
-    for (;;) {
-        SDL_Color col;
-        struct rect top, left, right, remain;
-        const struct record *record;
-        bool selected;
+    split(rect, from_left(BPM_WIDTH, 0), &left, &right);
+    draw_bpm_field(surface, &left, record->bpm, col);
 
-        if (n >= listing->entries)
-            break;
+    split(right, from_left(SPACER, 0), &left, &right);
+    draw_rect(surface, &left, col);
 
-        split(bottom, from_top(FONT_SPACE, 0), &top, &remain);
+    split(right, from_left(width, 0), &left, &right);
+    draw_text(surface, &left, record->artist, font, text_col, col);
 
-        if (remain.h < 0)
-            break;
+    split(right, from_left(SPACER, 0), &left, &right);
+    draw_rect(surface, &left, col);
+    draw_text(surface, &right, record->title, font, text_col, col);
+}
 
-        bottom = remain;
-        record = listing->record[n];
-        selected = (n == scroll->selected);
+/*
+ * Display a record library index, with scrollbar and current
+ * selection
+ */
 
-        if (selected) {
-            col = selected_col;
-        } else {
-            col = background_col;
-        }
-
-        split(top, from_left(BPM_WIDTH, 0), &left, &right);
-        draw_bpm_field(surface, &left, record->bpm, col);
-
-        split(right, from_left(SPACER, 0), &left, &right);
-        draw_rect(surface, &left, col);
-
-        split(right, from_left(width, 0), &left, &right);
-        draw_text(surface, &left, record->artist, font, text_col, col);
-
-        split(right, from_left(SPACER, 0), &left, &right);
-        draw_rect(surface, &left, col);
-        draw_text(surface, &right, record->title, font, text_col, col);
-
-        n++;
-    }
-
-    draw_rect(surface, &bottom, background_col);
+static void draw_index(SDL_Surface *surface, const struct rect rect,
+                         const struct selector *x)
+{
+    draw_listbox(&x->records, surface, rect, x->view_index, draw_record_row);
 }
 
 /*
@@ -1426,18 +1439,32 @@ static void draw_library(SDL_Surface *surface, const struct rect *rect,
                          struct selector *sel)
 {
     struct rect rsearch, rlists, rcrates, rrecords;
+    unsigned int rows;
 
     split(*rect, from_top(SEARCH_HEIGHT, SPACER), &rsearch, &rlists);
-    draw_search(surface, &rsearch, sel);
 
-    selector_set_lines(sel, count_rows(rlists, FONT_SPACE));
+    rows = count_rows(rlists, FONT_SPACE);
+    if (rows == 0) {
+
+        /* Hide the selector: draw nothing, and make it a 'virtual'
+         * one row selector. This is enough to use it from the search
+         * field and status only */
+
+        draw_search(surface, rect, sel);
+        selector_set_lines(sel, 1);
+
+        return;
+    }
+
+    draw_search(surface, &rsearch, sel);
+    selector_set_lines(sel, rows);
 
     split(rlists, columns(0, 4, SPACER), &rcrates, &rrecords);
     if (rcrates.w > LIBRARY_MIN_WIDTH) {
-        draw_listing(surface, &rrecords, sel->view_listing, &sel->records);
-        draw_crates(surface, &rcrates, sel->library, &sel->crates, sel->sort);
+        draw_index(surface, rrecords, sel);
+        draw_crates(surface, rcrates, sel);
     } else {
-        draw_listing(surface, rect, sel->view_listing, &sel->records);
+        draw_index(surface, *rect, sel);
     }
 }
 
@@ -1505,7 +1532,10 @@ static bool handle_key(SDLKey key, SDLMod mod)
 
     } else if (key == SDLK_TAB) {
         if (mod & KMOD_CTRL) {
-            selector_toggle_order(sel);
+            if (mod & KMOD_SHIFT)
+                selector_rescan(sel);
+            else
+                selector_toggle_order(sel);
         } else {
             selector_toggle(sel);
         }
@@ -1556,7 +1586,10 @@ static bool handle_key(SDLKey key, SDLMod mod)
             pl = &de->player;
             tc = &de->timecoder;
 
-            if (mod & KMOD_SHIFT) {
+            /* Some undocumented and 'special' functions exist
+             * here for the developer */
+
+            if (mod & KMOD_SHIFT && !(mod & KMOD_CTRL)) {
                 if (func < ndeck)
                     deck_clone(de, &deck[func]);
 
@@ -1573,7 +1606,10 @@ static bool handle_key(SDLKey key, SDLMod mod)
 
             case FUNC_TIMECODE:
                 if (mod & KMOD_CTRL) {
-                    timecoder_cycle_definition(tc);
+                    if (mod & KMOD_SHIFT)
+                        player_set_internal_playback(pl);
+                    else
+                        timecoder_cycle_definition(tc);
                 } else {
                     (void)player_toggle_timecode_control(pl);
                 }
@@ -1660,21 +1696,24 @@ static SDL_Surface* set_size(int w, int h, struct rect *r)
     return surface;
 }
 
+static void push_event(int t)
+{
+    SDL_Event e;
+
+    if (!SDL_PeepEvents(&e, 1, SDL_PEEKEVENT, SDL_EVENTMASK(t))) {
+        e.type = t;
+        if (SDL_PushEvent(&e) == -1)
+            abort();
+    }
+}
+
 /*
  * Timer which posts a screen redraw event
  */
 
 static Uint32 ticker(Uint32 interval, void *p)
 {
-    SDL_Event event;
-
-    if (!SDL_PeepEvents(&event, 1, SDL_PEEKEVENT, SDL_EVENTMASK(SDL_USEREVENT)))
-    {
-        event.type = SDL_USEREVENT;
-        event.user.code = EVENT_TICKER;
-        SDL_PushEvent(&event);
-    }
-
+    push_event(EVENT_TICKER);
     return interval;
 }
 
@@ -1682,13 +1721,14 @@ static Uint32 ticker(Uint32 interval, void *p)
  * Callback to tell the interface that status has changed
  */
 
-static void status_change(void)
+static void defer_status_redraw(struct observer *o, void *x)
 {
-    SDL_Event e;
+    push_event(EVENT_STATUS);
+}
 
-    e.type = SDL_USEREVENT;
-    e.user.code = EVENT_STATUS;
-    SDL_PushEvent(&e);
+static void defer_selector_redraw(struct observer *o, void *x)
+{
+    push_event(EVENT_SELECTOR);
 }
 
 /*
@@ -1745,22 +1785,19 @@ static int interface_main(void)
 
             break;
 
-        case SDL_USEREVENT:
-            switch (event.user.code) {
-            case EVENT_TICKER: /* request to poll the clocks */
-                decks_update = true;
-                break;
+        case EVENT_TICKER:
+            decks_update = true;
+            break;
 
-            case EVENT_QUIT: /* internal request to finish this thread */
-                goto finish;
+        case EVENT_QUIT: /* internal request to finish this thread */
+            goto finish;
 
-            case EVENT_STATUS:
-                status_update = true;
-                break;
+        case EVENT_STATUS:
+            status_update = true;
+            break;
 
-            default:
-                abort();
-            }
+        case EVENT_SELECTOR:
+            library_update = true;
             break;
 
         case SDL_KEYDOWN:
@@ -1774,8 +1811,6 @@ static int interface_main(void)
                 } else {
                     status_set(STATUS_VERBOSE, "No search results found");
                 }
-
-                library_update = true;
             }
             break;
         case SDL_KEYUP:
@@ -1800,6 +1835,9 @@ static int interface_main(void)
 
         if (rplayers.h < 0 || rplayers.w < 0)
             decks_update = false;
+
+        if (!library_update && !decks_update && !status_update)
+            continue;
 
         LOCK(surface);
 
@@ -1889,7 +1927,7 @@ static int parse_geometry(const char *s)
     case 0:
         break;
     case 2:
-        /* FIXME: Not a desirable way to get geometry information to
+        /* Not a desirable way to get geometry information to
          * SDL, but it seems to be the only way */
 
         sprintf(buf, "SDL_VIDEO_WINDOW_POS=%d,%d", x, y);
@@ -1948,7 +1986,8 @@ int interface_start(struct library *lib, const char *geo)
         return -1;
 
     selector_init(&selector, lib);
-    status_notify(status_change);
+    watch(&on_status, &status_changed, defer_status_redraw);
+    watch(&on_selector, &selector.changed, defer_selector_redraw);
     status_set(STATUS_VERBOSE, banner);
 
     fprintf(stderr, "Initialising SDL...\n");
@@ -1987,12 +2026,8 @@ int interface_start(struct library *lib, const char *geo)
 void interface_stop(void)
 {
     size_t n;
-    SDL_Event quit;
-
-    quit.type = SDL_USEREVENT;
-    quit.user.code = EVENT_QUIT;
-    if (SDL_PushEvent(&quit) == -1)
-        abort();
+ 
+    push_event(EVENT_QUIT);
 
     if (pthread_join(ph, NULL) != 0)
         abort();
@@ -2001,6 +2036,8 @@ void interface_stop(void)
         timecoder_monitor_clear(&deck[n].timecoder);
 
     clear_spinner();
+    ignore(&on_status);
+    ignore(&on_selector);
     selector_clear(&selector);
     clear_fonts();
 

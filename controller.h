@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,6 +26,7 @@
 #include <sys/types.h>
 
 struct deck;
+struct rt;
 
 /*
  * Base state of a 'controller', which is a MIDI controller or HID
@@ -51,7 +52,8 @@ struct controller_ops {
     void (*clear)(struct controller *c);
 };
 
-void controller_init(struct controller *c, struct controller_ops *t);
+int controller_init(struct controller *c, struct controller_ops *t,
+                    void *local, struct rt *rt);
 void controller_clear(struct controller *c);
 
 void controller_add_deck(struct controller *c, struct deck *d);

@@ -1,15 +1,15 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2, as published by the Free Software Foundation.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; if not, write to the Free
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -55,9 +55,10 @@
  * Return: the cubic interpolation of the sample at position 2 + mu
  */
 
-static inline double cubic_interpolate(double y[4], double mu)
+static inline double cubic_interpolate(signed short y[4], double mu)
 {
-    double a0, a1, a2, a3, mu2;
+    signed long a0, a1, a2, a3;
+    double mu2;
 
     mu2 = SQ(mu);
     a0 = y[3] - y[2] - y[0] + y[1];
@@ -65,7 +66,7 @@ static inline double cubic_interpolate(double y[4], double mu)
     a2 = y[2] - y[0];
     a3 = y[1];
 
-    return (a0 * mu * mu2) + (a1 * mu2) + (a2 * mu) + a3;
+    return (mu * mu2 * a0) + (mu2 * a1) + (mu * a2) + a3;
 }
 
 /*
@@ -111,7 +112,8 @@ static double build_pcm(signed short *pcm, unsigned samples, double sample_dt,
 
     for (s = 0; s < samples; s++) {
         int c, sa, q;
-        double f, i[PLAYER_CHANNELS][4];
+        double f;
+        signed short i[PLAYER_CHANNELS][4];
 
         /* 4-sample window for interpolation */
 
@@ -124,14 +126,14 @@ static double build_pcm(signed short *pcm, unsigned samples, double sample_dt,
         for (q = 0; q < 4; q++, sa++) {
             if (sa < 0 || sa >= tr->length) {
                 for (c = 0; c < PLAYER_CHANNELS; c++)
-                    i[c][q] = 0.0;
+                    i[c][q] = 0;
             } else {
                 signed short *ts;
                 int c;
 
                 ts = track_get_sample(tr, sa);
                 for (c = 0; c < PLAYER_CHANNELS; c++)
-                    i[c][q] = (double)ts[c];
+                    i[c][q] = ts[c];
             }
         }
 
@@ -217,7 +219,7 @@ void player_init(struct player *pl, unsigned int sample_rate,
 void player_clear(struct player *pl)
 {
     spin_clear(&pl->lock);
-    track_put(pl->track);
+    track_release(pl->track);
 }
 
 /*
@@ -249,6 +251,12 @@ bool player_toggle_timecode_control(struct player *pl)
         pl->recalibrate = true;
 
     return pl->timecode_control;
+}
+
+void player_set_internal_playback(struct player *pl)
+{
+    pl->timecode_control = false;
+    pl->pitch = 1.0;
 }
 
 double player_get_position(struct player *pl)
@@ -300,7 +308,7 @@ void player_set_track(struct player *pl, struct track *track)
     pl->track = track;
     spin_unlock(&pl->lock);
 
-    track_put(x); /* discard the old track */
+    track_release(x); /* discard the old track */
 }
 
 /*
@@ -317,14 +325,14 @@ void player_clone(struct player *pl, const struct player *from)
     pl->offset = pl->position - elapsed;
 
     t = from->track;
-    track_get(t);
+    track_acquire(t);
 
     spin_lock(&pl->lock);
     x = pl->track;
     pl->track = t;
     spin_unlock(&pl->lock);
 
-    track_put(x);
+    track_release(x);
 }
 
 /*
@@ -459,6 +467,9 @@ void player_collect(struct player *pl, signed short *pcm, unsigned samples)
     /* Sync pitch is applied post-filtering */
 
     pitch = pl->pitch * pl->sync_pitch;
+
+    /* We must return audio immediately to stay realtime. A spin
+     * lock protects us from changes to the audio source */
 
     if (!spin_try_lock(&pl->lock)) {
         r = build_silence(pcm, samples, pl->sample_dt, pitch);

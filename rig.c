@@ -1,15 +1,15 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2, as published by the Free Software Foundation.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; if not, write to the Free
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -37,7 +37,8 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*x))
 
 static int event[2]; /* pipe to wake up service thread */
-static struct list tracks = LIST_INIT(tracks);
+static struct list tracks = LIST_INIT(tracks),
+    excrates = LIST_INIT(excrates);
 mutex lock;
 
 int rig_init()
@@ -103,6 +104,7 @@ int rig_main()
         int r;
         struct pollfd *pe;
         struct track *track, *xtrack;
+        struct excrate *excrate, *xexcrate;
 
         pe = &pt[1];
 
@@ -112,6 +114,13 @@ int rig_main()
             if (pe == px)
                 break;
             track_pollfd(track, pe);
+            pe++;
+        }
+
+        list_for_each(excrate, &excrates, rig) {
+            if (pe == px)
+                break;
+            excrate_pollfd(excrate, pe);
             pe++;
         }
 
@@ -162,6 +171,9 @@ int rig_main()
 
         list_for_each_safe(track, xtrack, &tracks, rig)
             track_handle(track);
+
+        list_for_each_safe(excrate, xexcrate, &excrates, rig)
+            excrate_handle(excrate);
     }
  finish:
 
@@ -209,7 +221,15 @@ void rig_unlock(void)
 
 void rig_post_track(struct track *t)
 {
-    track_get(t);
+    track_acquire(t);
     list_add(&t->rig, &tracks);
     post_event(EVENT_WAKE);
 }
+
+void rig_post_excrate(struct excrate *e)
+{
+    excrate_acquire(e);
+    list_add(&e->rig, &excrates);
+    post_event(EVENT_WAKE);
+}
+

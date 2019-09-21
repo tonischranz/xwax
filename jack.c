@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,7 +29,6 @@
 #define MAX_BLOCK 512 /* samples */
 #define SCALE 32768
 
-
 struct jack {
     bool started;
     jack_port_t *input_port[DEVICE_CHANNELS],
@@ -42,14 +41,14 @@ static unsigned rate,
     nstarted = 0;
 static struct device *device[4];
 
-
 /* Interleave samples from a set of JACK buffers into a local buffer */
 
 static void interleave(signed short *buf, jack_default_audio_sample_t *jbuf[],
                        jack_nframes_t nframes)
 {
-    int n;
     while (nframes--) {
+        int n;
+
         for (n = 0; n < DEVICE_CHANNELS; n++) {
             *buf = (signed short)(*jbuf[n] * SCALE);
             buf++;
@@ -58,14 +57,14 @@ static void interleave(signed short *buf, jack_default_audio_sample_t *jbuf[],
     }
 }
 
-
 /* Uninterleave samples from a local buffer into a set of JACK buffers */
 
 static void uninterleave(jack_default_audio_sample_t *jbuf[],
                          signed short *buf, jack_nframes_t nframes)
 {
-    int n;
     while (nframes--) {
+        int n;
+
         for (n = 0; n < DEVICE_CHANNELS; n++) {
             *jbuf[n] = (jack_default_audio_sample_t)*buf / SCALE;
             buf++;
@@ -73,7 +72,6 @@ static void uninterleave(jack_default_audio_sample_t *jbuf[],
         }
     }
 }
-
 
 /* Process the given number of frames of audio on input and output
  * of the given JACK device */
@@ -113,7 +111,8 @@ static void process_deck(struct device *dv, jack_nframes_t nframes)
         interleave(buf, in, block);
         device_submit(dv, buf, block);
 
-        /* Audio output -- handle in the same loop for finer granularity */
+        /* Audio output is handle in the inner loop, so that
+         * we get the timecoder applied in small steps */
 
         device_collect(dv, buf, block);
         uninterleave(out, buf, block);
@@ -122,16 +121,16 @@ static void process_deck(struct device *dv, jack_nframes_t nframes)
     }
 }
 
-
 /* Process callback, which triggers the processing of audio on all
  * decks controlled by this file */
 
 static int process_callback(jack_nframes_t nframes, void *local)
 {
     size_t n;
-    struct jack *jack;
 
     for (n = 0; n < ndeck; n++) {
+        struct jack *jack;
+
         jack = (struct jack*)device[n]->local;
         if (jack->started)
             process_deck(device[n], nframes);
@@ -140,13 +139,11 @@ static int process_callback(jack_nframes_t nframes, void *local)
     return 0;
 }
 
-
 /* Shutdown callback */
 
 static void shutdown_callback(void *local)
 {
 }
-
 
 /* Initialise ourselves as a JACK client, called once per xwax
  * session, not per deck */
@@ -178,7 +175,6 @@ static int start_jack_client(void)
     return 0;
 }
 
-
 /* Close the JACK client, at which happens when all decks have been
  * cleared */
 
@@ -192,17 +188,17 @@ static int stop_jack_client(void)
     return 0;
 }
 
-
 /* Register the JACK ports needed for a single deck */
 
 static int register_ports(struct jack *jack, const char *name)
 {
     size_t n;
-    static const char channel[] = { 'L', 'R' };
-    char port_name[32];
 
     assert(DEVICE_CHANNELS == 2);
     for (n = 0; n < DEVICE_CHANNELS; n++) {
+        static const char channel[] = { 'L', 'R' };
+        char port_name[32];
+
 	sprintf(port_name, "%s_timecode_%c", name, channel[n]);
         jack->input_port[n] = jack_port_register(client, port_name,
                                                  JACK_DEFAULT_AUDIO_TYPE,
@@ -230,7 +226,6 @@ static unsigned int sample_rate(struct device *dv)
     return rate; /* the same rate is used for all decks */
 }
 
-
 /* Start audio rolling on this deck */
 
 static void start(struct device *dv)
@@ -251,7 +246,6 @@ static void start(struct device *dv)
     jack->started = true;
 }
 
-
 /* Stop audio rolling on this deck */
 
 static void stop(struct device *dv)
@@ -268,7 +262,6 @@ static void stop(struct device *dv)
             abort();
     }
 }
-
 
 /* Close JACK deck and any allocations */
 
@@ -306,14 +299,12 @@ static void clear(struct device *dv)
     }
 }
 
-
 static struct device_ops jack_ops = {
     .sample_rate = sample_rate,
     .start = start,
     .stop = stop,
     .clear = clear
 };
-
 
 /* Initialise a new JACK deck, creating a new JACK client if required,
  * and the approporiate input and output ports */

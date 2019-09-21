@@ -1,4 +1,4 @@
-# Copyright (C) 2013 Mark Hills <mark@xwax.org>
+# Copyright (C) 2014 Mark Hills <mark@xwax.org>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2, as
@@ -8,7 +8,7 @@
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
 # General Public License version 2 for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # version 2 along with this program; if not, write to the Free
 # Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -46,14 +46,36 @@ LDFLAGS ?= -O3
 
 # Core objects and libraries
 
-OBJS = controller.o cues.o deck.o device.o external.o interface.o \
-	library.o listing.o lut.o \
-	player.o realtime.o \
-	rig.o selector.o status.o thread.o timecoder.o track.o xwax.o
+OBJS = controller.o \
+	cues.o \
+	deck.o \
+	device.o \
+	excrate.o \
+	external.o \
+	index.o \
+	interface.o \
+	library.o \
+	listbox.o \
+	lut.o \
+	player.o \
+	realtime.o \
+	rig.o \
+	selector.o \
+	status.o \
+	thread.o \
+	timecoder.o \
+	track.o \
+	xwax.o
 DEVICE_CPPFLAGS =
 DEVICE_LIBS =
 
-TESTS = tests/cues tests/library tests/status tests/timecoder tests/track \
+TESTS = tests/cues \
+	tests/external \
+	tests/library \
+	tests/observer \
+	tests/status \
+	tests/timecoder \
+	tests/track \
 	tests/ttf
 
 # Optional device types
@@ -135,16 +157,21 @@ tests:		CPPFLAGS += -I.
 
 tests/cues:	tests/cues.o cues.o
 
-tests/library:	tests/library.o external.o library.o listing.o
+tests/external:	tests/external.o external.o
+
+tests/library:	tests/library.o excrate.o external.o index.o library.o rig.o status.o thread.o track.o
+tests/library:	LDFLAGS += -pthread
 
 tests/midi:	tests/midi.o midi.o
 tests/midi:	LDLIBS += $(ALSA_LIBS)
+
+tests/observer:	tests/observer.o
 
 tests/status:	tests/status.o status.o
 
 tests/timecoder:	tests/timecoder.o lut.o timecoder.o
 
-tests/track:	tests/track.o external.o rig.o status.o thread.o track.o
+tests/track:	tests/track.o excrate.o external.o index.o library.o rig.o status.o thread.o track.o
 tests/track:	LDFLAGS += -pthread
 tests/track:	LDLIBS += -lm
 

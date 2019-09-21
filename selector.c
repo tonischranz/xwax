@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>,
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>,
  *                    Yves Adler <yves.adler@googlemail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -23,158 +23,25 @@
 
 #include "selector.h"
 
+/*
+ * Scroll to our target entry if it can be found, otherwise leave our
+ * position unchanged
+ */
 
-static void scroll_reset(struct scroll *s)
-{
-    s->lines = 0;
-    s->offset = 0;
-    s->entries = 0;
-    s->selected = -1;
-}
-
-
-/* Set the number of lines displayed on screen. The current selection
- * is moved to within range. */
-
-static void scroll_set_lines(struct scroll *s, unsigned int lines)
-{
-    s->lines = lines;
-    if (s->selected >= s->offset + s->lines)
-        s->selected = s->offset + s->lines - 1;
-    if (s->offset + s->lines > s->entries) {
-        s->offset = s->entries - s->lines;
-        if (s->offset < 0)
-            s->offset = 0;  
-    }
-}
-
-
-/* Set the number of entries in the list which backs the scrolling
- * display. Bring the current selection within the bounds given. */
-
-static void scroll_set_entries(struct scroll *s, unsigned int entries)
-{
-    s->entries = entries;
-    if (s->selected >= s->entries)
-        s->selected = s->entries - 1;
-    if (s->offset + s->lines > s->entries) {
-        s->offset = s->entries - s->lines;
-        if (s->offset < 0)
-            s->offset = 0;
-    }
-
-    /* If we went previously had zero entries, reset the selection */
-
-    if (s->selected < 0)
-        s->selected = 0;
-}
-
-
-/* Scroll the selection up by n lines. Move the window offset if
- * needed */
-
-static void scroll_up(struct scroll *s, unsigned int n)
-{
-    s->selected -= n;
-    if (s->selected < 0)
-        s->selected = 0;
-
-    /* Move the viewing offset up, if necessary */
-
-    if (s->selected < s->offset) {
-        s->offset = s->selected - s->lines / 2 + 1;
-        if (s->offset < 0)
-            s->offset = 0;
-    }
-}
-
-
-static void scroll_down(struct scroll *s, unsigned int n)
-{
-    s->selected += n;
-    if (s->selected >= s->entries)
-        s->selected = s->entries - 1;
-
-    /* Move the viewing offset down, if necessary */
-
-    if (s->selected >= s->offset + s->lines) {
-        s->offset = s->selected - s->lines / 2;
-        if (s->offset + s->lines > s->entries)
-            s->offset = s->entries - s->lines;
-    }
-}
-
-
-/* Scroll to the first entry on the list */
-
-static void scroll_first(struct scroll *s)
-{
-    s->selected = 0;
-    s->offset = 0;
-}
-
-
-/* Scroll to the final entry on the list */
-
-static void scroll_last(struct scroll *s)
-{
-    s->selected = s->entries - 1;
-    s->offset = s->selected - s->lines + 1;
-    if (s->offset < 0)
-        s->offset = 0;
-}
-
-
-/* Scroll to an entry by index */
-
-static void scroll_to(struct scroll *s, unsigned int n)
-{
-    int p;
-
-    assert(s->selected != -1);
-    assert(n < s->entries);
-
-    /* Retain the on-screen position of the current selection */
-
-    p = s->selected - s->offset;
-    s->selected = n;
-    s->offset = s->selected - p;
-
-    if (s->offset < 0)
-        s->offset = 0;
-}
-
-
-/* Return the index of the current selected list entry, or -1 if
- * no current selection */
-
-static int scroll_current(struct scroll *s)
-{
-    if (s->entries == 0) {
-        return -1;
-    } else {
-        return s->selected;
-    }
-}
-
-
-/* Scroll to our target entry if it can be found, otherwise leave our
- * position unchanged */
-
-static void retain_position(struct selector *sel)
+static void retain_target(struct selector *sel)
 {
     size_t n;
-    struct listing *l;
+    struct index *l;
 
     if (sel->target == NULL)
         return;
 
-    l = sel->view_listing;
+    l = sel->view_index;
 
     switch (sel->sort) {
     case SORT_ARTIST:
     case SORT_BPM:
-        n = listing_find(l, sel->target, sel->sort);
+        n = index_find(l, sel->target, sel->sort);
         break;
     case SORT_PLAYLIST:
         /* Linear search */
@@ -188,66 +55,229 @@ static void retain_position(struct selector *sel)
     }
 
     if (n < l->entries)
-        scroll_to(&sel->records, n);
+        listbox_to(&sel->records, n);
 }
 
+/*
+ * Optimised version of retain_target where our position may
+ * only have moved due to insertion of a single record
+ */
 
-/* Return the listing which acts as the starting point before
- * string matching, based on the current crate */
+static void hunt_target(struct selector *s)
+{
+    struct index *l;
+    size_t n;
 
-static struct listing* initial(struct selector *sel)
+    if (s->target == NULL)
+        return;
+
+    l = s->view_index;
+    n = listbox_current(&s->records);
+
+    if (n < l->entries && l->record[n + 1] == s->target) {
+        struct listbox *x;
+
+        /* Retain selection in the same position on screen
+         * FIXME: listbox should provide this functionality */
+
+        x = &s->records;
+
+        x->selected++;
+        x->offset++;
+    }
+}
+
+/*
+ * Return: the currently selected crate
+ */
+
+static struct crate* current_crate(struct selector *sel)
+{
+    int n;
+
+    n = listbox_current(&sel->crates);
+    assert(n != -1);
+
+    return sel->library->crate[n];
+}
+
+/*
+ * Return the index which acts as the starting point before
+ * string matching, based on the current crate
+ */
+
+static struct index* initial(struct selector *sel)
 {
     struct crate *c;
 
-    c = sel->library->crate[sel->crates.selected];
+    c = current_crate(sel);
+    assert(c != NULL);
+
     switch (sel->sort) {
     case SORT_ARTIST:
-        return &c->by_artist;
+        return &c->listing->by_artist;
     case SORT_BPM:
-        return &c->by_bpm;
+        return &c->listing->by_bpm;
     case SORT_PLAYLIST:
-        return &c->by_order;
+        return &c->listing->by_order;
     default:
         abort();
     }
 }
 
+static void notify(struct selector *s)
+{
+    fire(&s->changed, NULL);
+}
+
+/*
+ * When the crate has changed, update the current index to reflect
+ * the crate and the search criteria
+ */
+
+static void do_content_change(struct selector *sel)
+{
+    (void)index_match(initial(sel), sel->view_index, &sel->match);
+    listbox_set_entries(&sel->records, sel->view_index->entries);
+    retain_target(sel);
+    notify(sel);
+}
+
+/*
+ * Callback notification that the crate has changed at the top
+ * level (eg. it's gone from busy to no longer busy)
+ */
+
+static void handle_activity(struct observer *o, void *x)
+{
+    struct selector *s = container_of(o, struct selector, on_activity);
+    notify(s);
+}
+
+/*
+ * Callback notification that the crate has changed, including
+ * removal of items
+ */
+
+static void handle_refresh(struct observer *o, void *x)
+{
+    struct selector *s = container_of(o, struct selector, on_refresh);
+
+    assert(x == NULL);
+
+    do_content_change(s);
+    notify(s);
+}
+
+/*
+ * A new record has been added to the currently selected crate. Merge
+ * this new addition into the current view, if applicable.
+ */
+
+static void merge_addition(struct observer *o, void *x)
+{
+    struct selector *s = container_of(o, struct selector, on_addition);
+    struct record *r = x;
+
+    assert(r != NULL);
+
+    if (!record_match(r, &s->match))
+        return;
+
+    /* If we're out of memory then silently drop it */
+
+    if (index_reserve(s->view_index, 1) == -1)
+        return;
+
+    if (s->sort == SORT_PLAYLIST)
+        index_add(s->view_index, r);
+    else
+        index_insert(s->view_index, r, s->sort);
+
+    listbox_set_entries(&s->records, s->view_index->entries);
+
+    /* If this addition is what we've been looking for, send the
+     * cursor to it (not optimal, in some cases we know the position
+     * from the insert above.) Otherwise track the target one step */
+
+    if (r == s->target)
+        retain_target(s);
+    else
+        hunt_target(s);
+
+    notify(s);
+}
+
+/*
+ * Attach callbacks to the relevant crate
+ *
+ * So that we are notified when the crate content changes and
+ * can update the GUI accordingly.
+ */
+
+static void watch_crate(struct selector *s, struct crate *c)
+{
+    watch(&s->on_activity, &c->activity, handle_activity);
+    watch(&s->on_refresh, &c->refresh, handle_refresh);
+    watch(&s->on_addition, &c->addition, merge_addition);
+}
 
 void selector_init(struct selector *sel, struct library *lib)
 {
+    struct crate *c;
+
     sel->library = lib;
 
-    scroll_reset(&sel->records);
-    scroll_reset(&sel->crates);
+    listbox_init(&sel->records);
+    listbox_init(&sel->crates);
 
-    scroll_set_entries(&sel->crates, lib->crates);
+    assert(lib->crates > 0);
+    listbox_set_entries(&sel->crates, lib->crates);
 
     sel->toggled = false;
     sel->sort = SORT_ARTIST;
     sel->search[0] = '\0';
     sel->search_len = 0;
+    sel->target = NULL;
 
-    listing_init(&sel->listing_a);
-    listing_init(&sel->listing_b);
-    sel->view_listing = &sel->listing_a;
-    sel->swap_listing = &sel->listing_b;
+    index_init(&sel->index_a);
+    index_init(&sel->index_b);
+    sel->view_index = &sel->index_a;
+    sel->swap_index = &sel->index_b;
 
-    (void)listing_copy(initial(sel), sel->view_listing);
-    scroll_set_entries(&sel->records, sel->view_listing->entries);
+    c = current_crate(sel);
+    watch_crate(sel, c);
+
+    (void)index_copy(initial(sel), sel->view_index);
+    listbox_set_entries(&sel->records, sel->view_index->entries);
+
+    event_init(&sel->changed);
 }
-
 
 void selector_clear(struct selector *sel)
 {
-    listing_clear(&sel->listing_a);
-    listing_clear(&sel->listing_b);
+    event_clear(&sel->changed);
+    ignore(&sel->on_activity);
+    ignore(&sel->on_refresh);
+    ignore(&sel->on_addition);
+    index_clear(&sel->index_a);
+    index_clear(&sel->index_b);
 }
 
+/*
+ * Set the number of display lines in use
+ *
+ * If the selector is invisible, it must continue to exist with 1 or
+ * more lines to provide a current selected crate and/or record.
+ *
+ * Pre: lines is greater than zero
+ */
 
 void selector_set_lines(struct selector *sel, unsigned int lines)
 {
-    scroll_set_lines(&sel->crates, lines);
-    scroll_set_lines(&sel->records, lines);
+    assert(lines > 0);
+    listbox_set_lines(&sel->crates, lines);
+    listbox_set_lines(&sel->records, lines);
 }
 
 /*
@@ -258,17 +288,18 @@ struct record* selector_current(struct selector *sel)
 {
     int i;
 
-    i = scroll_current(&sel->records);
+    i = listbox_current(&sel->records);
     if (i == -1) {
         return NULL;
     } else {
-        return sel->view_listing->record[i];
+        return sel->view_index->record[i];
     }
 }
 
-
-/* Make a note of the current selected record, and make it the
- * position we will try and retain if the crate is changed etc. */
+/*
+ * Make a note of the current selected record, and make it the
+ * position we will try and retain if the crate is changed etc.
+ */
 
 static void set_target(struct selector *sel)
 {
@@ -279,105 +310,124 @@ static void set_target(struct selector *sel)
         sel->target = x;
 }
 
-
 void selector_up(struct selector *sel)
 {
-    scroll_up(&sel->records, 1);
+    listbox_up(&sel->records, 1);
     set_target(sel);
+    notify(sel);
 }
-
 
 void selector_down(struct selector *sel)
 {
-    scroll_down(&sel->records, 1);
+    listbox_down(&sel->records, 1);
     set_target(sel);
+    notify(sel);
 }
-
 
 void selector_page_up(struct selector *sel)
 {
-    scroll_up(&sel->records, sel->records.lines);
+    listbox_up(&sel->records, sel->records.lines);
     set_target(sel);
+    notify(sel);
 }
-
 
 void selector_page_down(struct selector *sel)
 {
-    scroll_down(&sel->records, sel->records.lines);
+    listbox_down(&sel->records, sel->records.lines);
     set_target(sel);
+    notify(sel);
 }
-
 
 void selector_top(struct selector *sel)
 {
-    scroll_first(&sel->records);
+    listbox_first(&sel->records);
     set_target(sel);
+    notify(sel);
 }
-
 
 void selector_bottom(struct selector *sel)
 {
-    scroll_last(&sel->records);
+    listbox_last(&sel->records);
     set_target(sel);
+    notify(sel);
 }
 
+/*
+ * Helper function when we have switched crate
+ */
 
-/* When the crate has changed, update the current listing to reflect
- * the crate and the search criteria */
-
-static void crate_has_changed(struct selector *sel)
+static void do_crate_change(struct selector *sel)
 {
-    (void)listing_match(initial(sel), sel->view_listing, sel->search);
-    scroll_set_entries(&sel->records, sel->view_listing->entries);
-    retain_position(sel);
-}
+    struct crate *c;
 
+    c = current_crate(sel);
+
+    ignore(&sel->on_activity);
+    ignore(&sel->on_refresh);
+    ignore(&sel->on_addition);
+    watch_crate(sel, c);
+    do_content_change(sel);
+}
 
 void selector_prev(struct selector *sel)
 {
-    scroll_up(&sel->crates, 1);
+    listbox_up(&sel->crates, 1);
     sel->toggled = false;
-    crate_has_changed(sel);
+    do_crate_change(sel);
 }
-
 
 void selector_next(struct selector *sel)
 {
-    scroll_down(&sel->crates, 1);
+    listbox_down(&sel->crates, 1);
     sel->toggled = false;
-    crate_has_changed(sel);
+    do_crate_change(sel);
 }
 
-
-/* Toggle between the current crate and the 'all' crate */
+/*
+ * Toggle between the current crate and the 'all' crate
+ */
 
 void selector_toggle(struct selector *sel)
 {
     if (!sel->toggled) {
-        sel->toggle_back = scroll_current(&sel->crates);
-        scroll_first(&sel->crates);
+        sel->toggle_back = listbox_current(&sel->crates);
+        listbox_first(&sel->crates);
         sel->toggled = true;
     } else {
-        scroll_to(&sel->crates, sel->toggle_back);
+        listbox_to(&sel->crates, sel->toggle_back);
         sel->toggled = false;
     }
 
-    crate_has_changed(sel);
+    do_crate_change(sel);
 }
 
-
-/* Toggle between sort order */
+/*
+ * Toggle between sort order
+ */
 
 void selector_toggle_order(struct selector *sel)
 {
     set_target(sel);
     sel->sort = (sel->sort + 1) % SORT_END;
-    crate_has_changed(sel);
+    do_content_change(sel);
 }
 
+/*
+ * Request a re-scan on the currently selected crate
+ */
 
-/* Expand the search. Do not disrupt the running process on memory
- * allocation failure, leave the view listing incomplete */
+void selector_rescan(struct selector *sel)
+{
+    /* Ignore any errors at this point. A rescan must not leak
+     * resources or cause a crash */
+
+    (void)library_rescan(sel->library, current_crate(sel));
+}
+
+/*
+ * Expand the search. Do not disrupt the running process on memory
+ * allocation failure, leave the view index incomplete
+ */
 
 void selector_search_expand(struct selector *sel)
 {
@@ -385,29 +435,34 @@ void selector_search_expand(struct selector *sel)
         return;
 
     sel->search[--sel->search_len] = '\0';
-    crate_has_changed(sel);
+    match_compile(&sel->match, sel->search);
+
+    do_content_change(sel);
 }
 
-
-/* Refine the search. Do not distrupt the running process on memory
- * allocation failure, leave the view listing incomplete */
+/*
+ * Refine the search. Do not distrupt the running process on memory
+ * allocation failure, leave the view index incomplete
+ */
 
 void selector_search_refine(struct selector *sel, char key)
 {
-    struct listing *tmp;
+    struct index *tmp;
 
     if (sel->search_len >= sizeof(sel->search) - 1) /* would overflow */
         return;
 
     sel->search[sel->search_len] = key;
     sel->search[++sel->search_len] = '\0';
+    match_compile(&sel->match, sel->search);
 
-    (void)listing_match(sel->view_listing, sel->swap_listing, sel->search);
+    (void)index_match(sel->view_index, sel->swap_index, &sel->match);
 
-    tmp = sel->view_listing;
-    sel->view_listing = sel->swap_listing;
-    sel->swap_listing = tmp;
+    tmp = sel->view_index;
+    sel->view_index = sel->swap_index;
+    sel->swap_index = tmp;
 
-    scroll_set_entries(&sel->records, sel->view_listing->entries);
+    listbox_set_entries(&sel->records, sel->view_index->entries);
     set_target(sel);
+    notify(sel);
 }

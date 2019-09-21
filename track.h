@@ -1,15 +1,15 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2, as published by the Free Software Foundation.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; if not, write to the Free
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -71,10 +71,10 @@ void track_use_mlock(void);
 
 /* Tracks are dynamically allocated and reference counted */
 
-struct track* track_get_by_import(const char *importer, const char *path);
-struct track* track_get_empty(void);
-void track_get(struct track *t);
-void track_put(struct track *t);
+struct track* track_acquire_by_import(const char *importer, const char *path);
+struct track* track_acquire_empty(void);
+void track_acquire(struct track *t);
+void track_release(struct track *t);
 
 /* Functions used by the rig and main thread */
 

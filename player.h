@@ -1,15 +1,15 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2, as published by the Free Software Foundation.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; if not, write to the Free
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -57,6 +57,7 @@ void player_clear(struct player *pl);
 void player_set_timecoder(struct player *pl, struct timecoder *tc);
 void player_set_timecode_control(struct player *pl, bool on);
 bool player_toggle_timecode_control(struct player *pl);
+void player_set_internal_playback(struct player *pl);
 
 void player_set_track(struct player *pl, struct track *track);
 void player_clone(struct player *pl, const struct player *from);

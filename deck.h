@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,7 +24,7 @@
 
 #include "cues.h"
 #include "device.h"
-#include "listing.h"
+#include "index.h"
 #include "player.h"
 #include "realtime.h"
 #include "timecoder.h"

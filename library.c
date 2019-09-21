@@ -1,15 +1,15 @@
 /*
- * Copyright (C) 2013 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2014 Mark Hills <mark@xwax.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2, as published by the Free Software Foundation.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; if not, write to the Free
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
@@ -17,7 +17,7 @@
  *
  */
 
-#define _GNU_SOURCE /* getdelim(), strdupa() */
+#define _GNU_SOURCE /* strdupa() */
 #include <assert.h>
 #include <errno.h>
 #include <libgen.h> /*  basename() */
@@ -26,24 +26,39 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 
+#include "excrate.h"
 #include "external.h"
-#include "library.h"
 
 #define CRATE_ALL "All records"
 
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(*x))
+
+void listing_init(struct listing *l)
+{
+    index_init(&l->by_artist);
+    index_init(&l->by_bpm);
+    index_init(&l->by_order);
+    event_init(&l->addition);
+}
+
+void listing_clear(struct listing *l)
+{
+    index_clear(&l->by_artist);
+    index_clear(&l->by_bpm);
+    index_clear(&l->by_order);
+    event_clear(&l->addition);
+}
+
 /*
- * Initialise a crate
+ * Base initialiser for a crate, shared by the other init functions
  *
  * Note the deep copy of the crate name
  *
  * Return: 0 on success or -1 on memory allocation failure
  */
 
-static int crate_init(struct crate *c, const char *name, bool is_fixed)
+static int crate_init(struct crate *c, const char *name)
 {
     c->name = strdup(name);
     if (c->name == NULL) {
@@ -51,10 +66,129 @@ static int crate_init(struct crate *c, const char *name, bool is_fixed)
         return -1;
     }
 
-    c->is_fixed = is_fixed;
-    listing_init(&c->by_artist);
-    listing_init(&c->by_bpm);
-    listing_init(&c->by_order);
+    c->is_busy = false;
+
+    event_init(&c->activity);
+    event_init(&c->refresh);
+    event_init(&c->addition);
+
+    return 0;
+}
+
+/*
+ * Propagate an addition event on the listing upwards -- as an
+ * addition event on this crate
+ */
+
+static void propagate_addition(struct observer *o, void *x)
+{
+    struct crate *c = container_of(o, struct crate, on_addition);
+    fire(&c->addition, x);
+}
+
+/*
+ * Propagate notification that the scan has finished
+ */
+
+static void propagate_completion(struct observer *o, void *x)
+{
+    struct crate *c = container_of(o, struct crate, on_completion);
+    c->is_busy = false;
+    fire(&c->activity, NULL);
+}
+
+/*
+ * Initialise the crate which shows the entire library content
+ *
+ * Return: 0 on success, -1 on memory allocation failure
+ */
+
+static int crate_init_all(struct library *l, struct crate *c, const char *name)
+{
+    if (crate_init(c, name) == -1)
+        return -1;
+
+    c->is_fixed = true;
+    c->listing = &l->storage;
+    watch(&c->on_addition, &c->listing->addition, propagate_addition);
+    c->excrate = NULL;
+
+    return 0;
+}
+
+/*
+ * Wire in the excrate to this crate, including events
+ */
+
+static void hook_up_excrate(struct crate *c, struct excrate *e)
+{
+    if (!c->is_busy) {
+        c->is_busy = true;
+        fire(&c->activity, NULL);
+    }
+
+    c->excrate = e;
+    c->listing = &e->listing;
+    fire(&c->refresh, NULL);
+
+    watch(&c->on_addition, &c->listing->addition, propagate_addition);
+    watch(&c->on_completion, &e->completion, propagate_completion);
+}
+
+/*
+ * Initialise a crate which has a fixed scan as its source
+ *
+ * Not all crates have a source (eg. 'all' crate.) This is also
+ * convenient as in future there may be other sources such as virtual
+ * crates or external searches.
+ *
+ * Return: 0 on success or -1 on error
+ */
+
+static int crate_init_scan(struct library *l, struct crate *c, const char *name,
+                           const char *scan, const char *path)
+{
+    struct excrate *e;
+
+    if (crate_init(c, name) == -1)
+        return -1;
+
+    c->is_fixed = false;
+    c->scan = scan;
+    c->path = path;
+
+    e = excrate_acquire_by_scan(scan, path, &l->storage);
+    if (e == NULL)
+        return -1;
+
+    hook_up_excrate(c, e);
+
+    return 0;
+}
+
+/*
+ * Re-run a crate which has a scan as its source
+ *
+ * Return: 0 on success, -1 on error
+ */
+
+static int crate_rescan(struct crate *c, struct library *l)
+{
+    struct excrate *e;
+
+    assert(c->excrate != NULL);
+
+    /* Replace the excrate in-place. Care needed to re-wire
+     * everything back up again as before */
+
+    e = excrate_acquire_by_scan(c->scan, c->path, &l->storage);
+    if (e == NULL)
+        return -1;
+
+    ignore(&c->on_completion);
+    ignore(&c->on_addition);
+    excrate_release(c->excrate);
+    hook_up_excrate(c, e);
 
     return 0;
 }
@@ -68,9 +202,16 @@ static int crate_init(struct crate *c, const char *name, bool is_fixed)
 
 static void crate_clear(struct crate *c)
 {
-    listing_clear(&c->by_artist);
-    listing_clear(&c->by_bpm);
-    listing_clear(&c->by_order);
+    ignore(&c->on_addition);
+
+    if (c->excrate != NULL) {
+        ignore(&c->on_completion);
+        excrate_release(c->excrate);
+    }
+
+    event_clear(&c->activity);
+    event_clear(&c->refresh);
+    event_clear(&c->addition);
     free(c->name);
 }
 
@@ -91,30 +232,37 @@ static int crate_cmp(const struct crate *a, const struct crate *b)
 /*
  * Add a record into a crate and its various indexes
  *
- * FIXME: not all out-of-memory cases are implemented
- *
  * Return: Pointer to existing entry, NULL if out of memory
  * Post: Record added to the crate
  */
 
-static struct record* crate_add(struct crate *c, struct record *r)
+struct record* listing_add(struct listing *l, struct record *r)
 {
     struct record *x;
 
     assert(r != NULL);
 
-    x = listing_insert(&c->by_artist, r, SORT_ARTIST);
-    if (x != r) /* may be NULL */
+    /* Do all the memory reservation up-front as we can't
+     * un-wind if it errors later */
+
+    if (index_reserve(&l->by_artist, 1) == -1)
+        return NULL;
+    if (index_reserve(&l->by_bpm, 1) == -1)
+        return NULL;
+    if (index_reserve(&l->by_order, 1) == -1)
+        return NULL;
+
+    x = index_insert(&l->by_artist, r, SORT_ARTIST);
+    assert(x != NULL);
+    if (x != r)
         return x;
 
-    x = listing_insert(&c->by_bpm, r, SORT_BPM);
-    if (x == NULL)
-        abort(); /* FIXME: remove from all listings and return */
+    x = index_insert(&l->by_bpm, r, SORT_BPM);
     assert(x == r);
 
-    if (listing_add(&c->by_order, r) != 0)
-        abort(); /* FIXME: remove from all listings and return */
+    index_add(&l->by_order, r);
 
+    fire(&l->addition, r);
     return r;
 }
 
@@ -182,43 +330,6 @@ struct crate* get_crate(struct library *lib, const char *name)
 }
 
 /*
- * Get an existing crate, or create a new one if necessary
- *
- * Return: pointer to crate, or NULL on memory allocation failure
- */
-
-struct crate* use_crate(struct library *lib, char *name)
-{
-    struct crate *new_crate;
-
-    /* does this crate already exist? then return existing crate */
-    new_crate = get_crate(lib, name);
-    if (new_crate != NULL) {
-        fprintf(stderr, "Crate '%s' already exists...\n", name);
-        return new_crate;
-    }
-
-    /* allocate and fill space for new crate */
-    new_crate = malloc(sizeof(struct crate));
-    if (new_crate == NULL) {
-        perror("malloc");
-        return NULL;
-    }
-
-    if (crate_init(new_crate, name, false) == -1)
-        goto fail;
-
-    if (add_crate(lib, new_crate) == -1)
-        goto fail;
-
-    return new_crate;
-
- fail:
-    free(new_crate);
-    return NULL;
-}
-
-/*
  * Initialise the record library
  *
  * Return: 0 on success or -1 on memory allocation failure
@@ -228,8 +339,9 @@ int library_init(struct library *li)
 {
     li->crate = NULL;
     li->crates = 0;
+    listing_init(&li->storage);
 
-    if (crate_init(&li->all, CRATE_ALL, true) == -1)
+    if (crate_init_all(li, &li->all, CRATE_ALL) == -1)
         return -1;
 
     if (add_crate(li, &li->all) == -1) {
@@ -247,8 +359,6 @@ int library_init(struct library *li)
 static void record_clear(struct record *re)
 {
     free(re->pathname);
-    free(re->artist);
-    free(re->title);
 }
 
 /*
@@ -261,10 +371,10 @@ void library_clear(struct library *li)
 
     /* This object is responsible for all the record pointers */
 
-    for (n = 0; n < li->all.by_artist.entries; n++) {
+    for (n = 0; n < li->storage.by_artist.entries; n++) {
         struct record *re;
 
-        re = li->all.by_artist.record[n];
+        re = li->storage.by_artist.record[n];
         record_clear(re);
         free(re);
     }
@@ -281,54 +391,7 @@ void library_clear(struct library *li)
     free(li->crate);
 
     crate_clear(&li->all);
-}
-
-/*
- * Read the next string from the file up to a valid delimeter
- *
- * Return: pointer to alloc'd string
- * Post: *delim is set
- */
-
-static char* get_field(FILE *f, char *delim)
-{
-    char *s;
-    size_t len;
-
-    s = NULL;
-    len = 0;
-
-    for (;;) {
-        int c;
-        void *x;
-
-        x = realloc(s, len + 1);
-        if (x == NULL) {
-            perror("realloc");
-            free(s);
-            return NULL;
-        }
-        s = x;
-
-        c = fgetc(f);
-        switch (c) {
-        case EOF:
-            *delim = '\0';
-            goto done;
-
-        case '\n':
-        case '\t':
-            *delim = c;
-            goto done;
-        }
-
-        s[len] = c;
-        len++;
-    }
-
-done:
-    s[len] = '\0';
-    return s;
+    listing_clear(&li->storage);
 }
 
 /*
@@ -354,98 +417,83 @@ static double parse_bpm(const char *s)
 }
 
 /*
- * Read the next record from the file
+ * Split string into array of fields (destructive)
  *
- * Return: 0 on success, otherwise -1
- * Post: if 0 is returned, *r points to an alloc'd record or NULL
- *     if EOF was found
+ * Return: number of fields found
+ * Post: array x is filled with n values
  */
 
-static int get_record(FILE *f, struct record **r)
+static size_t split(char *s, char *x[], size_t len)
 {
-    struct record x, *y;
-    char delim, *s;
+    size_t n;
 
-    x.pathname = NULL;
-    x.artist = NULL;
-    x.title = NULL;
-    x.bpm = 0.0;
+    for (n = 0; n < len; n++) {
+        char *y;
 
-    x.pathname = get_field(f, &delim);
-    if (x.pathname == NULL)
-        goto fail;
+        y = strchr(s, '\t');
+        if (y == NULL) {
+            x[n] = s;
+            return n + 1;
+        }
 
-    /* Check for clean EOF */
-
-    if (delim == '\0' && x.pathname[0] == '\0') {
-        free(x.pathname);
-        *r = NULL;
-        return 0;
+        *y = '\0';
+        x[n] = s;
+        s = y + 1;
     }
 
-    if (delim != '\t') {
-        fprintf(stderr, "Malformed record '%s'\n", x.pathname);
-        goto fail;
-    }
+    return n;
+}
 
-    x.artist = get_field(f, &delim);
-    if (x.artist == NULL)
-        goto fail;
+/*
+ * Convert a line from the scan script to a record structure in memory
+ *
+ * Return: pointer to alloc'd record, or NULL on error
+ * Post: if successful, responsibility for pointer line is taken
+ */
 
-    if (delim != '\t') {
-        fprintf(stderr, "Malformed record '%s'\n", x.pathname);
-        goto fail;
-    }
+struct record* get_record(char *line)
+{
+    int n;
+    struct record *x;
+    char *field[4];
 
-    x.title = get_field(f, &delim);
-    if (x.title == NULL)
-        goto fail;
-
-    if (delim == '\n') /* other fields are optional */
-        goto done;
-
-    if (delim != '\t') {
-        fprintf(stderr, "Malformed record '%s'\n", x.pathname);
-        goto fail;
-    }
-
-    /* Beats-per-minute (BPM) */
-
-    s = get_field(f, &delim);
-    if (s == NULL)
-        goto fail;
-
-    x.bpm = parse_bpm(s);
-    if (!isfinite(x.bpm)) {
-        fprintf(stderr, "%s: Ignoring malformed BPM '%s'\n", x.pathname, s);
-        x.bpm = 0.0;
-    }
-
-    free(s);
-
-    if (delim != '\n') {
-        fprintf(stderr, "Malformed record '%s'\n", x.pathname);
-        goto fail;
-    }
-
-done:
-    y = malloc(sizeof *y);
-    if (y == NULL) {
+    x = malloc(sizeof *x);
+    if (!x) {
         perror("malloc");
-        goto fail;
+        return NULL;
     }
 
-    *y = x;
-    *r = y;
-    return 0;
+    x->bpm = 0.0;
 
-fail:
-    /* no-op on NULL */
-    free(x.pathname);
-    free(x.artist);
-    free(x.title);
+    n = split(line, field, ARRAY_SIZE(field));
 
-    return -1;
+    switch (n) {
+    case 4:
+        x->bpm = parse_bpm(field[3]);
+        if (!isfinite(x->bpm)) {
+            fprintf(stderr, "%s: Ignoring malformed BPM '%s'\n",
+                    field[0], field[3]);
+            x->bpm = 0.0;
+        }
+        /* fall-through */
+    case 3:
+        x->pathname = field[0];
+        x->artist = field[1];
+        x->title = field[2];
+        break;
+
+    case 2:
+    case 1:
+    default:
+        fprintf(stderr, "Malformed record '%s'\n", line);
+        goto bad;
+    }
+
+    return x;
+
+bad:
+    free(x);
+    return NULL;
 }
 
 /*
@@ -459,74 +507,48 @@ fail:
 
 int library_import(struct library *li, const char *scan, const char *path)
 {
-    int fd, status;
     char *cratename, *pathname;
-    pid_t pid;
-    FILE *fp;
     struct crate *crate;
-
-    fprintf(stderr, "Scanning '%s'...\n", path);
 
     pathname = strdupa(path);
     cratename = basename(pathname); /* POSIX version, see basename(3) */
     assert(cratename != NULL);
-    crate = use_crate(li, cratename);
-    if (crate == NULL)
-        return -1;
 
-    pid = fork_pipe(&fd, scan, "scan", path, NULL);
-    if (pid == -1)
-        return -1;
-
-    fp = fdopen(fd, "r");
-    if (fp == NULL) {
-        perror("fdopen");
-        abort(); /* recovery not implemented */
-    }
-
-    for (;;) {
-        struct record *d, *x;
-
-        if (get_record(fp, &d) == -1)
-            return -1;
-
-        if (d == NULL)
-            break;
-
-        /* Add to the crate of all records */
-
-        x = crate_add(&li->all, d);
-        if (x == NULL)
-            return -1;
-
-        /* If there is an existing entry, use it instead */
-
-        if (x != d) {
-            record_clear(d);
-            free(d);
-            d = x;
-        }
-
-        /* Insert into the user's crate */
-
-        if (crate_add(crate, d) == NULL)
-            return -1;
-    }
-
-    if (fclose(fp) == -1) {
-        perror("close");
-        abort(); /* assumption fclose() can't on read-only descriptor */
-    }
-
-    if (waitpid(pid, &status, 0) == -1) {
-        perror("waitpid");
+    crate = malloc(sizeof *crate);
+    if (crate == NULL) {
+        perror("malloc");
         return -1;
     }
 
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
-        fputs("Library scan exited reporting failure.\n", stderr);
-        return -1;
-    }
+    if (crate_init_scan(li, crate, cratename, scan, path) == -1)
+        goto fail;
+
+    if (add_crate(li, crate) == -1)
+        goto fail_crate;
 
     return 0;
+
+fail_crate:
+    crate_clear(crate);
+fail:
+    free(crate);
+    return -1;
+
+}
+
+/*
+ * Request a rescan on the given crate
+ *
+ * Only crates with an external source can be rescanned, others result
+ * in a no-op.
+ *
+ * Return: -1 if scan is not possible, otherwise 0 on success
+ */
+
+int library_rescan(struct library *l, struct crate *c)
+{
+    if (!c->excrate)
+        return -1;
+    else
+        return crate_rescan(c, l);
 }
