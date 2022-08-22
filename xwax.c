@@ -1,19 +1,19 @@
 /*
- * Copyright (C) 2018 Mark Hills <mark@xwax.org>
+ * Copyright (C) 2021 Mark Hills <mark@xwax.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2, as published by the Free Software Foundation.
+ * This file is part of "xwax".
  *
- * This program is distributed in the hope that it will be useful, but
+ * "xwax" is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License, version 3 as
+ * published by the Free Software Foundation.
+ *
+ * "xwax" is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License version 2 for more details.
+ * General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * version 2 along with this program; if not, write to the Free
- * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301, USA.
+ * along with this program; if not, see <https://www.gnu.org/licenses/>.
  *
  */
 
@@ -46,9 +46,8 @@
 #define DEFAULT_OSS_BUFFERS 8
 #define DEFAULT_OSS_FRAGMENT 7
 
-#define DEFAULT_ALSA_BUFFER 8 /* milliseconds */
+#define DEFAULT_ALSA_BUFFER 240 /* samples */
 
-#define DEFAULT_RATE 44100
 #define DEFAULT_PRIORITY 80
 
 #define DEFAULT_IMPORTER EXECDIR "/xwax-import"
@@ -58,7 +57,7 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*x))
 
 char *banner = "xwax " VERSION \
-    " (C) Copyright 2018 Mark Hills <mark@xwax.org>";
+    " (C) Copyright 2021 Mark Hills <mark@xwax.org>";
 
 size_t ndeck;
 struct deck deck[3];
@@ -105,18 +104,18 @@ static void usage(FILE *fd)
 #ifdef WITH_OSS
     fprintf(fd, "OSS device options:\n"
       "  -d <device>    Build a deck connected to OSS audio device\n"
-      "  -r <hz>        Sample rate (default %dHz)\n"
+      "  --rate <hz>    Sample rate (default 48000Hz)\n"
       "  -b <n>         Number of buffers (default %d)\n"
       "  -f <n>         Buffer size to request (2^n bytes, default %d)\n\n",
-      DEFAULT_RATE, DEFAULT_OSS_BUFFERS, DEFAULT_OSS_FRAGMENT);
+      DEFAULT_OSS_BUFFERS, DEFAULT_OSS_FRAGMENT);
 #endif
 
 #ifdef WITH_ALSA
     fprintf(fd, "ALSA device options:\n"
       "  -a <device>    Build a deck connected to ALSA audio device\n"
-      "  -r <hz>        Sample rate (default %dHz)\n"
-      "  -m <ms>        Buffer time (default %dms)\n\n",
-      DEFAULT_RATE, DEFAULT_ALSA_BUFFER);
+      "  --rate <hz>    Sample rate (default is automatic)\n"
+      "  --buffer <n>   Buffer size (default %d samples)\n\n",
+      DEFAULT_ALSA_BUFFER);
 #endif
 
 #ifdef WITH_JACK
@@ -135,7 +134,9 @@ static void usage(FILE *fd)
       "manual for details.\n\n"
       "Available timecodes (for use with -t):\n"
       "  serato_2a (default), serato_2b, serato_cd,\n"
-      "  traktor_a, traktor_b, mixvibes_v2, mixvibes_7inch\n\n"
+      "  pioneer_a, pioneer_b,\n"
+      "  traktor_a, traktor_b,\n"
+      "  mixvibes_v2, mixvibes_7inch\n\n"
       "See the xwax(1) man page for full information and examples.\n");
 }
 
@@ -191,7 +192,7 @@ int main(int argc, char *argv[])
     struct library library;
 
 #if defined WITH_OSS || WITH_ALSA
-    int rate;
+    unsigned int rate;  /* or 0 for 'automatic' */
 #endif
 
 #ifdef WITH_OSS
@@ -199,7 +200,7 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef WITH_ALSA
-    int alsa_buffer;
+    unsigned int alsa_buffer;
 #endif
 
     fprintf(stderr, "%s\n\n" NOTICE "\n\n", banner);
@@ -241,7 +242,7 @@ int main(int argc, char *argv[])
     use_mlock = false;
 
 #if defined WITH_OSS || WITH_ALSA
-    rate = DEFAULT_RATE;
+    rate = 0; /* automatic */
 #endif
 
 #ifdef WITH_ALSA
@@ -312,18 +313,23 @@ int main(int argc, char *argv[])
 #endif
 
 #if defined WITH_OSS || WITH_ALSA
-        } else if (!strcmp(argv[0], "-r")) {
+        } else if (!strcmp(argv[0], "--rate")) {
 
             /* Set sample rate for subsequence devices */
 
             if (argc < 2) {
-                fprintf(stderr, "-r requires an integer argument.\n");
+                fprintf(stderr, "--rate requires an integer argument.\n");
                 return -1;
             }
 
-            rate = strtol(argv[1], &endptr, 10);
+            rate = strtoul(argv[1], &endptr, 10);
             if (*endptr != '\0') {
-                fprintf(stderr, "-r requires an integer argument.\n");
+                fprintf(stderr, "--rate requires an integer argument.\n");
+                return -1;
+            }
+
+            if (rate < 8000) {
+                fprintf(stderr, "--rate must be a positive integer, in Hz.\n");
                 return -1;
             }
 
@@ -332,18 +338,18 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef WITH_ALSA
-        } else if (!strcmp(argv[0], "-m")) {
+        } else if (!strcmp(argv[0], "--buffer")) {
 
             /* Set size of ALSA buffer for subsequence devices */
 
             if (argc < 2) {
-                fprintf(stderr, "-m requires an integer argument.\n");
+                fprintf(stderr, "--buffer requires an integer argument.\n");
                 return -1;
             }
 
-            alsa_buffer = strtol(argv[1], &endptr, 10);
+            alsa_buffer = strtoul(argv[1], &endptr, 10);
             if (*endptr != '\0') {
-                fprintf(stderr, "-m requires an integer argument.\n");
+                fprintf(stderr, "--buffer requires an integer argument.\n");
                 return -1;
             }
 
@@ -376,7 +382,8 @@ int main(int argc, char *argv[])
 
 #ifdef WITH_OSS
             case 'd':
-                r = oss_init(device, argv[1], rate, oss_buffers, oss_fragment);
+                r = oss_init(device, argv[1], rate ? rate : 48000,
+                             oss_buffers, oss_fragment);
                 break;
 #endif
 #ifdef WITH_ALSA

@@ -1,4 +1,19 @@
+* Replaced ALSA '-m' flag with a new '--buffer' in samples
+* Revised ALSA buffer handling to improve latencies
+* Renamed '-r' flag to '--rate'
+* Restrict ALSA sample rates to those implemented in hardware
+* Minor fixes
+
+Acknowledgements: Daniel Schürmann
+
+v1.8 (2021-08-18)
+-----------------
+
+* Change to the license to GPL version 3
+* Compatibility with Pioneer DJ "RekordBox" vinyls
 * Fix a bug where decimal numbers are parsed in an unexpected way
+
+Acknowledgements: Hugh Frater, Kilian, Yves Adler
 
 v1.7 (2018-01-19)
 -----------------
