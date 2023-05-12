@@ -1,3 +1,11 @@
+to build on debian based hosts
+
+```
+sudo apt install libsdl1.2-dev libsdl-ttf2.0-dev
+
+```
+
+
 xwax: Digital vinyl on Linux
 
 (C) Copyright 2021 Mark Hills <mark@xwax.org>
