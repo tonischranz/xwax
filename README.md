@@ -11,7 +11,7 @@ sudo apt-get install cdparanoia mpg123 ffmpeg
 ```
 ./xwax -s scan -i import -t mixvibes_v2 -l /media/toni/data/music/ -a deck1 
 ```
-
+----------------------------
 xwax: Digital vinyl on Linux
 
 (C) Copyright 2021 Mark Hills <mark@xwax.org>
