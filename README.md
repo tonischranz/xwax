@@ -2,14 +2,14 @@
 [rtprio](https://wiki.xwax.org/setting_up_real_time_audio_priority_for_xwax)
 
 ```
-sudo apt install build-essential libasound2-dev libasound2 libsdl-ttf2.0-dev libsdl1.2-dev
-sudo apt-get install cdparanoia mpg123 ffmpeg
+sudo apt install build-essential libasound2-dev libasound2 libsdl-ttf2.0-dev libsdl1.2-dev libjack-dev
+sudo apt install cdparanoia mpg123 ffmpeg
 
-./configure --prefix /usr --enable-alsa
+./configure --prefix /usr --enable-alsa --enable-jack
 
 ```
 ```
-./xwax -s scan -i import -t mixvibes_v2 -l /media/toni/data/music/ -a deck1 
+./xwax -s scan -i import -t mixvibes_v2 -l /media/toni/data/music/ -j deck1 
 ```
 ----------------------------
 xwax: Digital vinyl on Linux
