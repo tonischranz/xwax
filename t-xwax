@@ -1,0 +1,5 @@
+#! /bin/bash
+qjackctl &
+alsa_in -d hw:CODEC -q 0 & 
+alsa_out -d hw:0 -q 0 &
+./xwax -s scan -i import -t mixvibes_v2 -l /media/toni/data/music/ -j d1 -j d2
